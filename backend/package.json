@@ -1,0 +1,10 @@
+{
+  "name": "lpa-backend-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Seed scripts for Live Prediction Arena",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0"
+  }
+}

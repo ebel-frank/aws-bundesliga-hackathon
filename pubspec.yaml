@@ -1,0 +1,41 @@
+name: live_prediction_arena
+description: "Live Prediction Arena - A game-like hub for live sports prediction."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.4
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+  get: ^4.6.6
+  get_storage: ^2.1.1
+  dio: ^5.4.0
+  web_socket_channel: ^2.4.0
+  flutter_animate: ^4.5.0
+  shimmer: ^3.0.0
+  flutter_svg: ^2.0.10+1
+  share_plus: ^13.1.0
+  screenshot: ^3.0.0
+  path_provider: ^2.1.4
+  amazon_cognito_identity_dart_2: ^3.6.5
+  xml: ^6.5.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/icons/
+    - assets/images/
+    - assets/animations/
+    - assets/data/

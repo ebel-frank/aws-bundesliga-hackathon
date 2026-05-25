@@ -1,0 +1,445 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Live Prediction Arena - Backend API
+
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        MATCHES_TABLE: !Ref MatchesTable
+        ROOMS_TABLE: !Ref RoomsTable
+        ROUNDS_TABLE: !Ref RoundsTable
+        CONNECTIONS_TABLE: !Ref ConnectionsTable
+        USER_POOL_ID: !Ref CognitoUserPool
+
+Resources:
+  # ─── Cognito Authentication ────────────────────────────────────
+
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: lpa-users
+      AutoVerifiedAttributes:
+        - email
+      UsernameAttributes:
+        - email
+      Schema:
+        - Name: email
+          Required: true
+          Mutable: true
+        - Name: name
+          Required: false
+          Mutable: true
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: true
+          RequireUppercase: false
+          RequireNumbers: true
+          RequireSymbols: false
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: lpa-mobile-client
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ALLOW_USER_PASSWORD_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+        - ALLOW_USER_SRP_AUTH
+
+  # ─── DynamoDB Tables ───────────────────────────────────────────
+
+  MatchesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-matches
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: matchId
+          AttributeType: S
+        - AttributeName: status
+          AttributeType: S
+      KeySchema:
+        - AttributeName: matchId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: status-index
+          KeySchema:
+            - AttributeName: status
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  RoomsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-rooms
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: roomCode
+          AttributeType: S
+        - AttributeName: matchId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: roomCode
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: matchId-index
+          KeySchema:
+            - AttributeName: matchId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  RoundsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-rounds
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: matchId
+          AttributeType: S
+        - AttributeName: roundNumber
+          AttributeType: N
+      KeySchema:
+        - AttributeName: matchId
+          KeyType: HASH
+        - AttributeName: roundNumber
+          KeyType: RANGE
+
+  ConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-connections
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: connectionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: connectionId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # ─── REST API ──────────────────────────────────────────────────
+
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization'"
+        AllowOrigin: "'*'"
+
+  # ─── Lambda Functions (REST) ───────────────────────────────────
+
+  GetMatchesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: matches.getMatches
+      CodeUri: functions/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref MatchesTable
+      Events:
+        GetMatches:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /matches
+            Method: get
+
+  GetRoomsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: rooms.getRooms
+      CodeUri: functions/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoomsTable
+      Events:
+        GetRooms:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /matches/{matchId}/rooms
+            Method: get
+
+  CreateRoomFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: rooms.createRoom
+      CodeUri: functions/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoomsTable
+      Events:
+        CreateRoom:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /rooms
+            Method: post
+
+  JoinRoomFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: rooms.joinRoom
+      CodeUri: functions/
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
+          WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoomsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+      Events:
+        JoinRoom:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /rooms/join/{roomCode}
+            Method: post
+
+  GetRoundsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: rounds.getRounds
+      CodeUri: functions/
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoundsTable
+      Events:
+        GetRounds:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /rounds/{matchId}
+            Method: get
+
+  # ─── DFL Event Processing ──────────────────────────────────────
+
+  MatchStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-match-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: matchId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: matchId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  DflEventsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: dfl-events.processEvents
+      CodeUri: functions/
+      Timeout: 900
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
+          WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+          QUESTION_TRIGGER_FUNCTION: !Ref QuestionTriggerFunction
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+        - S3ReadPolicy:
+            BucketName: '*'
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource: !GetAtt QuestionTriggerFunction.Arn
+
+  QuestionTriggerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: question-trigger.handler
+      CodeUri: functions/
+      Timeout: 120
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
+          MATCH_STATE_TABLE: !Ref MatchStateTable
+          WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+          BEDROCK_ENDPOINT: 'https://ijkd9ntd62.execute-api.us-east-1.amazonaws.com/ai'
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MatchStateTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+
+  # ─── WebSocket API ─────────────────────────────────────────────
+
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: lpa-websocket
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WebSocketApi
+      StageName: prod
+      AutoDeploy: true
+
+  ConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket.connect
+      CodeUri: functions/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+
+  DisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket.disconnect
+      CodeUri: functions/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+
+  MessageFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: websocket.message
+      CodeUri: functions/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RoomsTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $connect
+      Target: !Sub "integrations/${ConnectIntegration}"
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $disconnect
+      Target: !Sub "integrations/${DisconnectIntegration}"
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $default
+      Target: !Sub "integrations/${MessageIntegration}"
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ConnectFunction.Arn}/invocations"
+
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${DisconnectFunction.Arn}/invocations"
+
+  MessageIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MessageFunction.Arn}/invocations"
+
+  ConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ConnectFunction
+      Principal: apigateway.amazonaws.com
+
+  DisconnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DisconnectFunction
+      Principal: apigateway.amazonaws.com
+
+  MessagePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref MessageFunction
+      Principal: apigateway.amazonaws.com
+
+Outputs:
+  RestApiUrl:
+    Description: REST API endpoint
+    Value: !Sub "https://${RestApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  WebSocketUrl:
+    Description: WebSocket endpoint
+    Value: !Sub "wss://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+
+  CognitoUserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+
+  CognitoClientId:
+    Description: Cognito App Client ID
+    Value: !Ref CognitoUserPoolClient
+
+  MatchesTableName:
+    Value: !Ref MatchesTable
+
+  RoomsTableName:
+    Value: !Ref RoomsTable
+
+  RoundsTableName:
+    Value: !Ref RoundsTable
+
+  DflEventsFunctionName:
+    Description: DFL Events stream processor function name
+    Value: !Ref DflEventsFunction
+
+  QuestionTriggerFunctionName:
+    Description: Question trigger function name
+    Value: !Ref QuestionTriggerFunction
+
+  MatchStateTableName:
+    Description: Match state buffer table
+    Value: !Ref MatchStateTable

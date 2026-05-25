@@ -1,0 +1,29 @@
+<PutDataRequest RequestId="fa1596e3-961f-48b7-bc39-73e4871df496" MessageTime="2025-09-14T20:06:02.548+00:00" TransmissionComplete="true" TransmissionSuspended="false" DataStatus="postmatch">
+  <Event EventId="18902400000006" X-Position="52.30" MatchId="DFL-MAT-111111" Y-Source-Position="35.30" EventTime="2025-01-01T16:30:17.210+02:00" X-Source-Position="52.30" Y-Position="35.30">
+    <KickOff TeamLeft="DFL-CLU-000002" TeamRight="DFL-CLU-000001" GameSection="firstHalf">
+      <Play Recipient="DFL-OBJ-000025" FlatCross="false" Team="DFL-CLU-000002" Height="high" FromOpenPlay="false" BallPossessionPhase="6" Distance="short" PenaltyBox="false" PlayOrigin="ownHalf" Player="DFL-OBJ-000029" Evaluation="successfullyCompleted" PlayAngle="34.67" SemiField="false">
+        <Pass FreeKickLayup="false"/>
+      </Play>
+    </KickOff>
+  </Event>
+  <Event EventId="18902400000007" X-Position="52.90" MatchId="DFL-MAT-111111" Y-Source-Position="9.73" EventTime="2025-01-01T16:30:19.566+02:00" X-Source-Position="89.27" Y-Position="33.50">
+    <Play Recipient="DFL-OBJ-000010" FlatCross="false" Team="DFL-CLU-000002" Height="high" FromOpenPlay="true" BallPossessionPhase="7" Distance="long" PenaltyBox="false" PlayOrigin="oppositionHalf" Player="DFL-OBJ-000025" Evaluation="unsuccessful" PlayAngle="0.47" SemiField="false">
+      <Pass Direction="diagonalBall" FreeKickLayup="false"/>
+    </Play>
+  </Event>
+  <Event EventId="18902400000008" X-Position="90.37" MatchId="DFL-MAT-111111" Y-Source-Position="33.10" EventTime="2025-01-01T16:30:23.637+02:00" X-Source-Position="101.59" Y-Position="8.63">
+    <Play Recipient="DFL-OBJ-000001" FlatCross="false" Team="DFL-CLU-000001" Height="flat" FromOpenPlay="true" BallPossessionPhase="8" Distance="medium" PenaltyBox="false" PlayOrigin="ownHalf" Player="DFL-OBJ-000010" Evaluation="successfullyCompleted" PlayAngle="113.68" SemiField="false">
+      <Pass FreeKickLayup="false"/>
+    </Play>
+  </Event>
+  <Event EventId="18902400000009" X-Position="102.29" MatchId="DFL-MAT-111111" Y-Source-Position="35.81" EventTime="2025-01-01T16:30:24.519+02:00" X-Source-Position="102.29" Y-Position="35.81">
+    <Play Recipient="DFL-OBJ-000009" FlatCross="false" Team="DFL-CLU-000001" Height="flat" FromOpenPlay="true" BallPossessionPhase="9" Distance="medium" PenaltyBox="false" PlayOrigin="ownHalf" Player="DFL-OBJ-000001" Evaluation="successfullyCompleted" PlayAngle="47.83" SemiField="false">
+      <Pass FreeKickLayup="false"/>
+    </Play>
+  </Event>
+  <Event EventId="18902400000010" X-Position="60.92" MatchId="DFL-MAT-111111" Y-Source-Position="59.37" EventTime="2025-01-01T16:30:30.877+02:00" X-Source-Position="80.95" Y-Position="64.99">
+    <Play Recipient="DFL-OBJ-000029" FlatCross="false" Team="DFL-CLU-000001" Height="flat" FromOpenPlay="true" BallPossessionPhase="10" Distance="medium" PenaltyBox="false" PlayOrigin="ownHalf" Player="DFL-OBJ-000009" Evaluation="unsuccessful" PlayAngle="344.45" SemiField="false">
+      <Pass FreeKickLayup="false"/>
+    </Play>
+  </Event>
+</PutDataRequest>
