@@ -31,7 +31,6 @@ class HomeController extends GetxController
       iconAsset: 'assets/images/quiz_bg_8.jpg',
       accentColor: AppColors.arenaAccent,
       glowColor: AppColors.arenaAccent.withValues(alpha: 0.4),
-      featureTags: ['Multi-Player', 'Real-time', 'XP & Badges'],
     ),
     GameModeModel(
       id: 'fantasy',
@@ -42,7 +41,6 @@ class HomeController extends GetxController
       iconAsset: 'assets/images/quiz_bg_2.jpg',
       accentColor: AppColors.fantasyAccent,
       glowColor: AppColors.fantasyAccent.withValues(alpha: 0.4),
-      featureTags: ['Team builder', 'Real-time', 'Rankings'],
     ),
   ];
 
@@ -90,8 +88,20 @@ class HomeController extends GetxController
     isLoadingMatches.value = true;
     try {
       final matches = await ApiService.getMatches();
+      // Sort: live first, then by matchDate (Today > Tomorrow > others)
+      matches.sort((a, b) {
+        const priority = {'live': 0, 'upcoming': 1, 'finished': 2};
+        final statusCompare = (priority[a.status] ?? 1).compareTo(priority[b.status] ?? 1);
+        if (statusCompare != 0) return statusCompare;
+
+        const datePriority = {'Today': 0, 'Tomorrow': 1};
+        final aDate = datePriority[a.matchDate] ?? 2;
+        final bDate = datePriority[b.matchDate] ?? 2;
+        return aDate.compareTo(bDate);
+      });
       upcomingMatches.value = matches;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Failed to load upcoming matches: $e');
       upcomingMatches.value = [];
     } finally {
       isLoadingMatches.value = false;

@@ -25,9 +25,11 @@ class RoundResultOverlayWidget extends StatelessWidget {
         filter: ImageFilter.blur(sigmaX: 6, sigmaY: 6),
         child: Center(
           child: Obx(() {
+            final isDeferred = controller.isDeferred.value;
             final wasCorrect = controller.wasCorrect.value;
-            final borderColor =
-                wasCorrect ? AppColors.neonGreen : AppColors.error;
+            final borderColor = isDeferred
+                ? AppColors.arenaAccent
+                : (wasCorrect ? AppColors.neonGreen : AppColors.error);
 
             return Container(
               width: screenWidth - 48,
@@ -45,70 +47,113 @@ class RoundResultOverlayWidget extends StatelessWidget {
               ),
               child: Padding(
                 padding: const EdgeInsets.all(24),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // XP Burst
-                    XpBurstWidget(isCorrect: wasCorrect),
-                    const SizedBox(height: 16),
-                    // Result text
-                    Text(
-                      wasCorrect ? '✓ Correct!' : '✗ Wrong',
-                      style: TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: wasCorrect
-                            ? AppColors.neonGreen
-                            : AppColors.error,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    // Correct answer reveal
-                    Text(
-                      'Answer: ${controller.activeRound.value?.correctAnswer ?? ""}',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(height: 20),
-                    // XP earned
-                    Text(
-                      '+${controller.xpEarnedThisRound.value} XP',
-                      style: const TextStyle(
-                        fontSize: 36,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.arenaAccent,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    // Bonus pills
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        if (controller.speedBonusEarned.value)
-                          _BonusPill(
-                            text: '⚡ Speed +5',
-                            color: AppColors.neonGreen,
-                          ),
-                        if (controller.speedBonusEarned.value &&
-                            controller.newStreak.value >= 3)
-                          const SizedBox(width: 8),
-                        if (controller.newStreak.value >= 3)
-                          _BonusPill(
-                            text:
-                                '🔥 ${controller.newStreak.value}× Streak',
-                            color: const Color(0xFFFFB300),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
+                child: isDeferred
+                    ? _buildDeferredContent(controller)
+                    : _buildResolvedContent(controller, wasCorrect),
               ),
             );
           }),
         ),
       ),
+    );
+  }
+  Widget _buildDeferredContent(ArenaController controller) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        const Icon(
+          Icons.check_circle_outline,
+          size: 64,
+          color: AppColors.arenaAccent,
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          '✓ Answer Recorded!',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: AppColors.arenaAccent,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          controller.myPick.value.isNotEmpty
+              ? 'Your pick: ${controller.myPick.value}'
+              : 'No answer submitted',
+          style: const TextStyle(
+            fontSize: 14,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'Results at match end 🏁',
+          style: TextStyle(
+            fontSize: 16,
+            fontWeight: FontWeight.w500,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildResolvedContent(ArenaController controller, bool wasCorrect) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // XP Burst
+        XpBurstWidget(isCorrect: wasCorrect),
+        const SizedBox(height: 16),
+        // Result text
+        Text(
+          wasCorrect ? '✓ Correct!' : '✗ Wrong',
+          style: TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: wasCorrect ? AppColors.neonGreen : AppColors.error,
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Correct answer reveal
+        Text(
+          'Answer: ${controller.activeRound.value?.correctAnswer ?? ""}',
+          style: const TextStyle(
+            fontSize: 14,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 20),
+        // XP earned
+        Text(
+          '+${controller.xpEarnedThisRound.value} XP',
+          style: const TextStyle(
+            fontSize: 36,
+            fontWeight: FontWeight.bold,
+            color: AppColors.arenaAccent,
+          ),
+        ),
+        const SizedBox(height: 12),
+        // Bonus pills
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (controller.speedBonusEarned.value)
+              _BonusPill(
+                text: '⚡ Speed +5',
+                color: AppColors.neonGreen,
+              ),
+            if (controller.speedBonusEarned.value &&
+                controller.newStreak.value >= 3)
+              const SizedBox(width: 8),
+            if (controller.newStreak.value >= 3)
+              _BonusPill(
+                text: '🔥 ${controller.newStreak.value}× Streak',
+                color: const Color(0xFFFFB300),
+              ),
+          ],
+        ),
+      ],
     );
   }
 }

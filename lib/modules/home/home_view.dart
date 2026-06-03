@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:get/get.dart';
 import 'package:shimmer/shimmer.dart';
@@ -29,13 +30,25 @@ class HomeView extends GetView<HomeController> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: 16),
-                  _buildHeader(),
+                  _buildHeader()
+                      .animate()
+                      .fadeIn(duration: 400.ms, delay: 0.ms)
+                      .slideY(begin: -0.2, end: 0, duration: 400.ms, curve: Curves.easeOut),
                   const SizedBox(height: 28),
-                  _buildScoreSection(),
+                  _buildScoreSection()
+                      .animate()
+                      .fadeIn(duration: 400.ms, delay: 150.ms)
+                      .slideY(begin: 0.15, end: 0, duration: 400.ms, curve: Curves.easeOut),
                   const SizedBox(height: 28),
-                  _buildChallengeCards(),
+                  _buildChallengeCards()
+                      .animate()
+                      .fadeIn(duration: 400.ms, delay: 300.ms)
+                      .slideY(begin: 0.15, end: 0, duration: 400.ms, curve: Curves.easeOut),
                   const SizedBox(height: 28),
-                  _buildUpcomingMatches(),
+                  _buildUpcomingMatches()
+                      .animate()
+                      .fadeIn(duration: 400.ms, delay: 450.ms)
+                      .slideY(begin: 0.15, end: 0, duration: 400.ms, curve: Curves.easeOut),
                   const SizedBox(height: 32),
                 ],
               ),
@@ -387,24 +400,56 @@ class _UpcomingMatchCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       width: 270,
-      padding: const EdgeInsets.all(14),
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         color: AppColors.cardSurface,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(color: AppColors.cardBorder, width: 1),
       ),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+      child: Stack(
         children: [
-          // Team color bars
-          Row(
-            children: [
-              Expanded(
-                child: Container(
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: AppColors.arenaAccent,
-                    borderRadius: BorderRadius.circular(2),
+          // Background team badges
+          if (match.homeTeamBadge.isNotEmpty)
+            Positioned(
+              left: -40,
+              top: 0,
+              bottom: 0,
+              child: Opacity(
+                opacity: 0.05,
+                child: SvgPicture.asset(
+                  match.homeTeamBadge,
+                  fit: BoxFit.fitHeight,
+                ),
+              ),
+            ),
+          if (match.awayTeamBadge.isNotEmpty)
+            Positioned(
+              right: -40,
+              top: 0,
+              bottom: 0,
+              child: Opacity(
+                opacity: 0.05,
+                child: SvgPicture.asset(
+                  match.awayTeamBadge,
+                  fit: BoxFit.fitHeight,
+                ),
+              ),
+            ),
+          // Content
+          Padding(
+            padding: const EdgeInsets.all(14),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Team color bars
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        height: 4,
+                        decoration: BoxDecoration(
+                          color: AppColors.arenaAccent,
+                          borderRadius: BorderRadius.circular(2),
                   ),
                 ),
               ),
@@ -435,28 +480,25 @@ class _UpcomingMatchCard extends StatelessWidget {
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               // Home team
-              Column(
-                children: [
-                  _buildTeamBadge(match.homeTeamBadge),
-                  const SizedBox(height: 4),
-                  Text(
-                    match.homeTeam,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textPrimary,
+              SizedBox(
+                width: 80,
+                child: Column(
+                  children: [
+                    _buildTeamBadge(match.homeTeamBadge),
+                    const SizedBox(height: 4),
+                    Text(
+                      match.homeTeam,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textPrimary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
                     ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    "FC",
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
                 ],
+                ),
               ),
               // Date & time
               Column(
@@ -480,30 +522,30 @@ class _UpcomingMatchCard extends StatelessWidget {
                 ],
               ),
               // Away team
-              Column(
-                children: [
-                  _buildTeamBadge(match.awayTeamBadge),
-                  const SizedBox(height: 4),
-                  Text(
-                    match.awayTeam,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textPrimary,
+              SizedBox(
+                width: 80,
+                child: Column(
+                  children: [
+                    _buildTeamBadge(match.awayTeamBadge),
+                    const SizedBox(height: 4),
+                    Text(
+                      match.awayTeam,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: AppColors.textPrimary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                      maxLines: 1,
                     ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  Text(
-                    "FC",
-                    style: const TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w500,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ],
+          ),
+        ],
+          ),
           ),
         ],
       ),

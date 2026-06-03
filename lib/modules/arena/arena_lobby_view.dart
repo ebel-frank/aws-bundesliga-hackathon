@@ -31,6 +31,10 @@ class ArenaLobbyView extends GetView<ArenaController> {
           curve: Curves.easeInOut,
         );
       }
+      // Refresh rooms when navigating back to room list
+      if (index == 1) {
+        controller.fetchAvailableRooms();
+      }
     });
 
     return WillPopScope(
@@ -118,37 +122,54 @@ class _MatchListPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const SizedBox(height: 24),
-          const Text('Select a Match', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-          const SizedBox(height: 4),
-          const Text('Choose a match to predict on', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-          const SizedBox(height: 20),
-          Expanded(
-            child: Obx(() {
-              if (controller.isLoadingMatches.value) {
-                return const Center(child: CircularProgressIndicator(color: AppColors.arenaAccent));
-              }
-              if (controller.availableMatches.isEmpty) {
-                return const Center(child: Text('No matches available', style: TextStyle(color: AppColors.textMuted)));
-              }
-              return ListView.separated(
-                itemCount: controller.availableMatches.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (_, i) => _MatchCard(
-                  match: controller.availableMatches[i],
-                  onTap: () => controller.selectMatch(controller.availableMatches[i]),
-                ),
-              );
-            }),
-          ),
-        ],
-      ),
-    );
+    return Obx(() {
+      if (controller.isLoadingMatches.value) {
+        return const Center(child: CircularProgressIndicator(color: AppColors.arenaAccent));
+      }
+      if (controller.availableMatches.isEmpty) {
+        return const Center(child: Text('No matches available', style: TextStyle(color: AppColors.textMuted)));
+      }
+
+      // Sort: live first, then Today, Tomorrow, then others
+      final sorted = List<MatchModel>.from(controller.availableMatches);
+      sorted.sort((a, b) {
+        const priority = {'live': 0, 'upcoming': 1, 'finished': 2};
+        final statusCompare = (priority[a.status] ?? 1).compareTo(priority[b.status] ?? 1);
+        if (statusCompare != 0) return statusCompare;
+        const datePriority = {'Today': 0, 'Tomorrow': 1};
+        final aDate = datePriority[a.matchDate] ?? 2;
+        final bDate = datePriority[b.matchDate] ?? 2;
+        return aDate.compareTo(bDate);
+      });
+
+      return ListView.builder(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        itemCount: sorted.length + 1, // +1 for header
+        itemBuilder: (_, i) {
+          if (i == 0) {
+            return const Padding(
+              padding: EdgeInsets.only(top: 24, bottom: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Select a Match', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                  SizedBox(height: 4),
+                  Text('Choose a match to predict on', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                ],
+              ),
+            );
+          }
+          final match = sorted[i - 1];
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _MatchCard(
+              match: match,
+              onTap: () => controller.selectMatch(match),
+            ),
+          );
+        },
+      );
+    });
   }
 }
 
@@ -174,13 +195,42 @@ class _MatchCardState extends State<_MatchCard> {
         scale: _pressed ? 0.97 : 1.0,
         duration: const Duration(milliseconds: 120),
         child: Container(
+          clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
             boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 8, offset: const Offset(0, 3))],
           ),
-          child: Column(
+          child: Stack(
             children: [
+              // Background team badges (blended)
+              if (widget.match.homeTeamBadge.isNotEmpty)
+                Positioned(
+                  left: -40,
+                  top: 0,
+                  bottom: 0,
+                  child: Opacity(
+                    opacity: 0.06,
+                    child: SvgPicture.asset(
+                      widget.match.homeTeamBadge,
+                      fit: BoxFit.fitHeight,
+                    ),
+                  ),
+                ),
+              if (widget.match.awayTeamBadge.isNotEmpty)
+                Positioned(
+                  right: -40,
+                  top: 0,
+                  bottom: 0,
+                  child: Opacity(
+                    opacity: 0.06,
+                    child: SvgPicture.asset(
+                      widget.match.awayTeamBadge,
+                      fit: BoxFit.fitHeight,
+                    ),
+                  ),
+                ),
+              // Content
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
                 child: Column(

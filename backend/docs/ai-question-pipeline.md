@@ -61,63 +61,33 @@ event.subType === 'Shot' && event.evaluation === 'savedByGoalkeeper'
 play.IsFreeKick === 'true' && event.xPosition > 73.5  // (105m * 0.7)
 ```
 
-## Bedrock Input Format
+## Bedrock Integration
 
-### System Prompt
-```
-You are a live football prediction quiz generator for the Bundesliga.
-Generate engaging multiple-choice questions based on real-time match events.
-Questions must be PREDICTIVE (what happens NEXT), not about what already happened.
-Questions should be answerable within 15 seconds.
-Return valid JSON only.
-```
+### Model
+- **Claude 3 Haiku** (`anthropic.claude-3-haiku-20240307-v1:0`)
+- Direct invoke via `@aws-sdk/client-bedrock-runtime`
+- No intermediary API
 
-### User Message (sample - after a Goal)
-```json
-{
-  "match": {
-    "competition": "Bundesliga",
-    "homeTeam": "FC Bayern",
-    "awayTeam": "Hamburger SV",
-    "score": "1-0",
-    "minute": "23'",
-    "stadium": "Allianz Arena"
-  },
-  "trigger": {
-    "type": "Goal",
-    "team": "FC Bayern",
-    "player": "S. Sechs",
-    "minute": "22'"
-  },
-  "recentEvents": [
-    { "minute": "20'", "type": "Pass", "player": "S. Fünf", "team": "FC Bayern", "evaluation": "successful" },
-    { "minute": "21'", "type": "Shot", "player": "S. Sechs", "team": "FC Bayern", "evaluation": "saved" },
-    { "minute": "21'", "type": "Corner", "team": "FC Bayern" },
-    { "minute": "22'", "type": "Goal", "player": "S. Sechs", "team": "FC Bayern", "assist": "S. Acht" }
-  ],
-  "matchStats": {
-    "possession": { "home": 62, "away": 38 },
-    "shots": { "home": 5, "away": 1 },
-    "corners": { "home": 3, "away": 0 },
-    "cards": { "home": 0, "away": 1 }
-  },
-  "instruction": "Generate a prediction question about what happens next in this match. The goal was just scored 35 seconds ago."
-}
-```
+### Question Generation
+- Bedrock decides: number of options (2-4), time limit (10-20s), difficulty, resolution type
+- Returns structured JSON with `resolutionType` and `resolutionCriteria`
 
-### Expected Bedrock Response
-```json
-{
-  "question": "FC Bayern just scored! Will there be another goal in the next 10 minutes?",
-  "options": ["Yes, Bayern scores again", "Yes, Hamburg scores", "No more goals in 10 min", "A card is given first"],
-  "correctAnswer": null,
-  "category": "match_prediction",
-  "difficulty": "medium",
-  "timeLimit": 15
-}
-```
+### Answer Resolution
+- **Immediate**: Resolved by monitoring subsequent events (within seconds)
+- **Deferred**: Resolved at match end via a second Bedrock call
+- At final whistle: all pending questions + match event log sent to Bedrock for resolution
+- Results broadcast to players, XP awarded
 
-Note: `correctAnswer` is null at generation time — it gets resolved later when the actual events unfold.
+### Storage (`lpa-questions` table)
+```
+matchId (PK) | questionId (SK)
+question, options, category, difficulty, timeLimit
+resolutionType, resolutionCriteria
+correctAnswer (null until resolved)
+status: "pending" | "resolved"
+userPicks: { userId: "optionChosen" }
+triggerType, triggerEvent, createdAt, resolvedAt
+```
 
 ## Data Flow
 

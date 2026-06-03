@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
@@ -11,8 +12,9 @@ import '../../../models/prediction_round_model.dart';
 import '../../../models/squad_model.dart';
 import '../../../services/api_service.dart';
 import '../../../services/auth_service.dart';
-import '../../../services/dfl_event_service.dart';
 import '../../../services/websocket_service.dart';
+import '../widgets/live_chat_widget.dart';
+import 'package:flutter/services.dart';
 
 /// Represents the current screen/phase within the Arena module.
 enum ArenaScreen { lobby, waiting, prediction, roundResult, end }
@@ -36,8 +38,6 @@ class ArenaController extends GetxController {
   StreamSubscription? _roomWsSub;
 
   // ── DFL Event Feed ────────────────────────────────────────────
-  final DflEventService dflEventService = DflEventService();
-  StreamSubscription? _dflEventSub;
   final Rx<String> latestEventSummary = ''.obs;
 
   // ── Screen state ──────────────────────────────────────────────
@@ -76,6 +76,9 @@ class ArenaController extends GetxController {
   final RxInt totalRounds = 0.obs;
   final RxList<PredictionRoundModel> rounds = <PredictionRoundModel>[].obs;
 
+  /// Stores the user's picks: questionId → selected option
+  final Map<String, String> _userPicks = {};
+
   // ── Active prediction round ───────────────────────────────────
   final Rx<PredictionRoundModel?> activeRound = Rx<PredictionRoundModel?>(null);
   final RxList<PlayerPickModel> roundPicks = <PlayerPickModel>[].obs;
@@ -91,9 +94,14 @@ class ArenaController extends GetxController {
   final RxBool wasCorrect = false.obs;
   final RxBool speedBonusEarned = false.obs;
   final RxInt newStreak = 0.obs;
+  final RxBool isDeferred = true.obs; // true = answer resolved at match end
 
   // ── End of game ───────────────────────────────────────────────
   final RxList<String> earnedBadges = <String>[].obs;
+
+  // ── Live chat & reactions ─────────────────────────────────────
+  final RxList<ChatMessage> chatMessages = <ChatMessage>[].obs;
+  final RxList<FloatingReaction> floatingReactions = <FloatingReaction>[].obs;
 
   // ── Match countdown (waiting room) ─────────────────────────────
   final RxInt matchCountdownSeconds = 0.obs;
@@ -162,6 +170,14 @@ class ArenaController extends GetxController {
         _handleDflWebSocketEvent(msg);
       } else if (action == 'prediction_question') {
         _handlePredictionQuestion(msg);
+      } else if (action == 'questions_resolved') {
+        _handleQuestionsResolved(msg);
+      } else if (action == 'match_ended') {
+        _handleMatchEnded(msg);
+      } else if (action == 'chat_message') {
+        _handleChatMessage(msg);
+      } else if (action == 'reaction') {
+        _handleReaction(msg);
       }
     });
   }
@@ -176,17 +192,6 @@ class ArenaController extends GetxController {
 
     final summary = event['summary'] as String? ?? 'Match event';
     latestEventSummary.value = summary;
-
-    Get.snackbar(
-      'Match Event',
-      summary,
-      snackPosition: SnackPosition.TOP,
-      duration: const Duration(seconds: 3),
-      backgroundColor: const Color(0xDD1A2138),
-      colorText: const Color(0xFFFFFFFF),
-      margin: const EdgeInsets.all(12),
-      borderRadius: 10,
-    );
   }
 
   /// Handle a prediction question received from the AI pipeline.
@@ -194,6 +199,7 @@ class ArenaController extends GetxController {
     final data = msg['data'] as Map<String, dynamic>?;
     if (data == null) return;
 
+    final questionId = data['questionId'] as String? ?? '';
     final question = data['question'] as String? ?? '';
     final options = List<String>.from(data['options'] ?? []);
     final category = data['category'] as String? ?? 'live';
@@ -204,26 +210,196 @@ class ArenaController extends GetxController {
 
     // Create a new prediction round from the AI-generated question
     final newRound = PredictionRoundModel(
-      roundId: 'ai_${DateTime.now().millisecondsSinceEpoch}',
-      roundNumber: currentRoundIndex.value + 2,
+      roundId: questionId.isNotEmpty ? questionId : 'ai_${DateTime.now().millisecondsSinceEpoch}',
+      roundNumber: rounds.length + 1,
       questionText: question,
       options: options,
-      correctAnswer: options.first, // Placeholder — resolved later
+      correctAnswer: '', // Unknown until resolved at match end
       category: category,
       timeLimitSeconds: timeLimit,
     );
 
-    // Add to rounds and start it
+    // Add to rounds
     rounds.add(newRound);
     totalRounds.value = rounds.length;
+    currentRoundIndex.value = rounds.length - 2; // _startNextRound increments
 
-    // If we're on the placeholder round, replace it
-    if (activeRound.value?.roundId == 'r1') {
-      currentRoundIndex.value = rounds.length - 2;
+    // Reset pick state and start the round
+    myPick.value = '';
+    hasLockedIn.value = false;
+    activeRound.value = newRound;
+    countdownSeconds.value = timeLimit;
+    currentScreen.value = ArenaScreen.prediction;
+
+    // Alert the user — vibrate + system sound
+    _alertQuestionArrived();
+
+    _startCountdown();
+  }
+
+  /// Handle end-of-match question resolutions from the backend.
+  void _handleQuestionsResolved(Map<String, dynamic> msg) {
+    final data = msg['data'] as Map<String, dynamic>?;
+    if (data == null) return;
+
+    final results = data['results'] as List<dynamic>? ?? [];
+    if (results.isEmpty) return;
+
+    // Calculate score: 10 XP per correct answer
+    int correctCount = 0;
+    for (final result in results) {
+      final questionId = result['questionId'] as String? ?? '';
+      final correctAnswer = result['correctAnswer'] as String? ?? '';
+      final userPick = _userPicks[questionId];
+      if (userPick != null && userPick == correctAnswer) {
+        correctCount++;
+      }
     }
 
-    // Start the new round
-    _startNextRound();
+    final totalXp = correctCount * 10;
+
+    // Build leaderboard with current user's score
+    // For now, populate with squad members — current user gets calculated XP, others get 0
+    final members = squad.value?.members ?? [];
+    final lb = members.map((m) {
+      if (m.userId == _currentUserId) {
+        return m.copyWith(totalXP: totalXp);
+      }
+      return m.copyWith(totalXP: 0); // Other players' scores would come from backend
+    }).toList();
+
+    // Sort by XP descending
+    lb.sort((a, b) => b.totalXP.compareTo(a.totalXP));
+    leaderboard.assignAll(lb);
+
+    // Determine badges
+    final badges = <String>[];
+    if (correctCount == results.length && results.isNotEmpty) {
+      badges.add('Perfect Round');
+    }
+    if (correctCount >= 3) {
+      badges.add('Streak Master');
+    }
+    earnedBadges.assignAll(badges);
+
+    // Navigate to end screen
+    _countdownTimer?.cancel();
+    currentScreen.value = ArenaScreen.end;
+    Get.toNamed(AppRoutes.arenaEnd);
+  }
+
+  /// Handle match ended signal (stream finished).
+  void _handleMatchEnded(Map<String, dynamic> msg) {
+    // If questions_resolved hasn't already navigated us, go to end screen
+    if (currentScreen.value == ArenaScreen.end) return;
+
+    _countdownTimer?.cancel();
+    activeRound.value = null;
+
+    // Build leaderboard with what we have
+    final members = squad.value?.members ?? [];
+    if (leaderboard.isEmpty && members.isNotEmpty) {
+      leaderboard.assignAll(members);
+    }
+
+    currentScreen.value = ArenaScreen.end;
+    Get.toNamed(AppRoutes.arenaEnd);
+  }
+
+  /// Handle incoming chat message from another player.
+  void _handleChatMessage(Map<String, dynamic> msg) {
+    final data = msg['data'] as Map<String, dynamic>?;
+    if (data == null) return;
+
+    final userId = data['userId'] as String? ?? '';
+    final displayName = data['displayName'] as String? ?? 'Player';
+    final text = data['text'] as String? ?? '';
+    if (text.isEmpty) return;
+
+    // Skip if this is our own message (already added locally)
+    if (userId == _currentUserId) return;
+
+    chatMessages.add(ChatMessage(
+      userId: userId,
+      displayName: displayName,
+      text: text,
+    ));
+
+    // Keep only last 50 messages in memory
+    if (chatMessages.length > 50) {
+      chatMessages.removeRange(0, chatMessages.length - 50);
+    }
+  }
+
+  /// Handle incoming emoji reaction from another player.
+  void _handleReaction(Map<String, dynamic> msg) {
+    final data = msg['data'] as Map<String, dynamic>?;
+    if (data == null) return;
+
+    final emoji = data['emoji'] as String? ?? '';
+    final userId = data['userId'] as String? ?? '';
+    if (emoji.isEmpty) return;
+
+    // Skip if this is our own reaction (already added locally)
+    if (userId == _currentUserId) return;
+
+    _addFloatingReaction(emoji);
+  }
+
+  /// Send a chat message to the room.
+  void sendChatMessage(String text) {
+    if (text.isEmpty) return;
+
+    final roomCode = squad.value?.roomCode ?? '';
+    _roomWs.send(
+      action: 'chat_message',
+      roomCode: roomCode,
+      data: {
+        'userId': _currentUserId,
+        'displayName': _currentDisplayName,
+        'text': text,
+      },
+    );
+
+    // Add locally immediately for instant feedback
+    chatMessages.add(ChatMessage(
+      userId: _currentUserId,
+      displayName: _currentDisplayName,
+      text: text,
+    ));
+    if (chatMessages.length > 50) {
+      chatMessages.removeRange(0, chatMessages.length - 50);
+    }
+  }
+
+  /// Send an emoji reaction to the room.
+  void sendReaction(String emoji) {
+    final roomCode = squad.value?.roomCode ?? '';
+    _roomWs.send(
+      action: 'reaction',
+      roomCode: roomCode,
+      data: {
+        'userId': _currentUserId,
+        'emoji': emoji,
+      },
+    );
+
+    // Show locally immediately
+    _addFloatingReaction(emoji);
+  }
+
+  /// Add a floating reaction to the list.
+  void _addFloatingReaction(String emoji) {
+    final reaction = FloatingReaction(
+      emoji: emoji,
+      startX: Random().nextDouble() * 20,
+    );
+    floatingReactions.add(reaction);
+  }
+
+  /// Remove a completed floating reaction.
+  void removeReaction(String id) {
+    floatingReactions.removeWhere((r) => r.id == id);
   }
 
   /// Fetches available rooms from API. Sets isLoadingRooms during fetch.
@@ -238,6 +414,13 @@ class ArenaController extends GetxController {
       }
       final rooms = await ApiService.getRooms(matchId);
       availableRooms.assignAll(rooms);
+
+      // Update room count on the match in the list
+      final matchIndex = availableMatches.indexWhere((m) => m.matchId == matchId);
+      if (matchIndex != -1) {
+        final updated = availableMatches[matchIndex].copyWith(roomCount: rooms.length);
+        availableMatches[matchIndex] = updated;
+      }
     } catch (e) {
       errorMessage.value = 'Failed to load rooms. Please try again.';
     } finally {
@@ -320,46 +503,23 @@ class ArenaController extends GetxController {
     }
   }
 
-  /// Host starts the game. Fetches rounds from API, begins first round.
-  /// Navigates everyone to the prediction screen.
+  /// Host starts the game. Navigates to prediction screen.
+  /// Questions arrive via WebSocket from the AI pipeline.
   void startGame() async {
-    if (!isMatchLive.value) return; // Can't start until match is live
+    if (!isMatchLive.value) return;
 
-    // Load DFL event feed
-    await dflEventService.loadSampleData();
-    _dflEventSub?.cancel();
-    _dflEventSub = dflEventService.events.listen((event) {
-      latestEventSummary.value = event.summary;
-      // Show toast via Get.snackbar
-      Get.snackbar(
-        'Match Event',
-        event.summary,
-        snackPosition: SnackPosition.TOP,
-        duration: const Duration(seconds: 3),
-        backgroundColor: const Color(0xDD1A2138),
-        colorText: const Color(0xFFFFFFFF),
-        margin: const EdgeInsets.all(12),
-        borderRadius: 10,
-      );
-    });
+    // Clear any old rounds
+    rounds.clear();
+    totalRounds.value = 0;
+    currentRoundIndex.value = -1;
+    activeRound.value = null;
+    _userPicks.clear();
+    chatMessages.clear();
+    floatingReactions.clear();
 
-    // If rounds are empty, populate with a single placeholder round
-    if (rounds.isEmpty) {
-      _initMockRounds();
-    }
-    if (rounds.isNotEmpty) {
-      totalRounds.value = rounds.length;
-      currentRoundIndex.value = -1;
-
-      // Start the first round BEFORE navigating so the view has data
-      _startNextRound();
-
-      // Start DFL event streaming
-      dflEventService.startStreaming(intervalSeconds: 3);
-
-      // Navigate to prediction screen
-      Get.toNamed(AppRoutes.arenaPrediction);
-    }
+    // Navigate to prediction screen — questions will arrive via WebSocket
+    currentScreen.value = ArenaScreen.prediction;
+    Get.toNamed(AppRoutes.arenaPrediction);
   }
 
   /// Starts the match countdown in the waiting room.
@@ -392,6 +552,7 @@ class ArenaController extends GetxController {
     hasLockedIn.value = false;
     xpEarnedThisRound.value = 0;
     wasCorrect.value = false;
+    isDeferred.value = false;
     speedBonusEarned.value = false;
     countdownSeconds.value = activeRound.value!.timeLimitSeconds;
 
@@ -419,6 +580,18 @@ class ArenaController extends GetxController {
     // TODO: POST /rounds/{roundId}/pick to backend
   }
 
+  /// Alert the user that a new question has arrived — vibrate + system sound.
+  void _alertQuestionArrived() {
+    // Heavy haptic feedback (vibration)
+    HapticFeedback.heavyImpact();
+    // Play system click sound as audio cue
+    SystemSound.play(SystemSoundType.alert);
+    // Double vibrate for emphasis
+    Future.delayed(const Duration(milliseconds: 200), () {
+      HapticFeedback.mediumImpact();
+    });
+  }
+
   /// Starts the 15-second countdown timer. Decrements countdownSeconds each second.
   void _startCountdown() {
     _countdownTimer?.cancel();
@@ -432,71 +605,47 @@ class ArenaController extends GetxController {
     });
   }
 
-  /// Called when timer hits 0. Resolves correct answer, calculates XP,
-  /// updates leaderboard, transitions to roundResult screen.
+  /// Called when timer hits 0. Records the pick and waits for next question.
+  /// Correct answers are resolved at match end.
   void _closeRound() {
     _countdownTimer?.cancel();
 
     final round = activeRound.value;
     if (round == null) return;
 
-    // Determine if the player's pick is correct
-    final isCorrect = myPick.value == round.correctAnswer;
-    wasCorrect.value = isCorrect;
+    // Record the pick (will be resolved at match end)
+    final pick = myPick.value;
+    if (pick.isNotEmpty) {
+      // Store locally for scoring at match end
+      _userPicks[round.roundId] = pick;
 
-    // Calculate XP: 10 base if correct + 5 speed bonus if secondsTaken ≤ 5
-    int xp = 0;
-    if (isCorrect) {
-      xp = 10;
-      final secondsTaken =
-          round.timeLimitSeconds - countdownSeconds.value;
-      if (secondsTaken <= 5) {
-        xp += 5;
-        speedBonusEarned.value = true;
-      } else {
-        speedBonusEarned.value = false;
-      }
+      // Send pick to backend via WebSocket
+      _roomWs.send(
+        action: 'submit_pick',
+        roomCode: squad.value?.roomCode ?? '',
+        data: {
+          'questionId': round.roundId,
+          'userId': _currentUserId,
+          'pick': pick,
+        },
+      );
+
+      // Show "answer recorded" state — deferred resolution at match end
+      currentScreen.value = ArenaScreen.roundResult;
+      isDeferred.value = true;
+      wasCorrect.value = false; // Unknown yet
+      xpEarnedThisRound.value = 0; // Will be calculated at match end
+
+      // After 3 seconds, go back to waiting for next question
+      Future.delayed(const Duration(seconds: 3), () {
+        activeRound.value = null;
+        currentScreen.value = ArenaScreen.prediction;
+      });
     } else {
-      speedBonusEarned.value = false;
+      // No pick made — skip overlay, go straight back to waiting
+      activeRound.value = null;
+      currentScreen.value = ArenaScreen.prediction;
     }
-    xpEarnedThisRound.value = xp;
-
-    // Update streak: increment on correct, reset on wrong
-    if (isCorrect) {
-      newStreak.value = newStreak.value + 1;
-    } else {
-      newStreak.value = 0;
-    }
-
-    // Update leaderboard — find current player and update XP/streak
-    // For now, update the first player in leaderboard as "self"
-    if (leaderboard.isNotEmpty) {
-      final updatedLeaderboard = leaderboard.map((player) {
-        if (player.isHost) {
-          // Assume host is the current user for now
-          return player.copyWith(
-            totalXP: player.totalXP + xp,
-            streak: newStreak.value,
-          );
-        }
-        return player;
-      }).toList();
-
-      // Re-sort leaderboard by totalXP descending
-      updatedLeaderboard.sort((a, b) => b.totalXP.compareTo(a.totalXP));
-      leaderboard.assignAll(updatedLeaderboard);
-    }
-
-    currentScreen.value = ArenaScreen.roundResult;
-
-    // After 4 seconds, proceed to next round or end game
-    Future.delayed(const Duration(seconds: 4), () {
-      if (currentRoundIndex.value + 1 >= rounds.length) {
-        _endGame();
-      } else {
-        _startNextRound();
-      }
-    });
   }
 
   /// Called after all rounds complete. Finalizes game, calculates badges,
@@ -529,31 +678,15 @@ class ArenaController extends GetxController {
 
   // ── Mock Data ─────────────────────────────────────────────────
 
-  void _initMockRounds() {
-    // Single placeholder round — timer is paused (long limit).
-    // Real questions will be generated from DFL events via AI.
-    rounds.assignAll(const [
-      PredictionRoundModel(
-        roundId: 'r1',
-        roundNumber: 1,
-        questionText: 'Waiting for AI-generated question...',
-        options: ['Option A', 'Option B', 'Option C'],
-        correctAnswer: 'Option A',
-        category: 'live',
-        timeLimitSeconds: 9999,
-      ),
-    ]);
-
-    totalRounds.value = 1;
-  }
+  // ── Mock Data ─────────────────────────────────────────────────
 
   static const _mockMatches = [
     MatchModel(
       matchId: 'm1',
       homeTeam: 'Bayern Munich',
-      awayTeam: 'Borussia Dortmund',
+      awayTeam: 'Eintracht Frankfurt',
       homeTeamBadge: 'assets/icons/germany_bayern-munchen.football-logo.svg',
-      awayTeamBadge: 'assets/icons/germany_borussia-dortmund.football-logos.svg',
+      awayTeamBadge: 'assets/icons/germany_eintracht-frankfurt.football-logos.svg',
       league: 'Bundesliga',
       matchTime: '20:30',
       matchDate: 'Today',
@@ -562,9 +695,9 @@ class ArenaController extends GetxController {
     ),
     MatchModel(
       matchId: 'm2',
-      homeTeam: 'Borussia Dortmund',
+      homeTeam: 'Eintracht Frankfurt',
       awayTeam: 'Bayern Munich',
-      homeTeamBadge: 'assets/icons/germany_borussia-dortmund.football-logos.svg',
+      homeTeamBadge: 'assets/icons/germany_eintracht-frankfurt.football-logos.svg',
       awayTeamBadge: 'assets/icons/germany_bayern-munchen.football-logo.svg',
       league: 'Bundesliga',
       matchTime: '18:30',
@@ -576,7 +709,7 @@ class ArenaController extends GetxController {
       matchId: 'm3',
       homeTeam: 'RB Leipzig',
       awayTeam: 'Bayern Munich',
-      homeTeamBadge: '',
+      homeTeamBadge: 'assets/icons/germany_rb-leipzig.football-logos.svg',
       awayTeamBadge: 'assets/icons/germany_bayern-munchen.football-logo.svg',
       league: 'Bundesliga',
       matchTime: '15:30',
@@ -587,9 +720,9 @@ class ArenaController extends GetxController {
     MatchModel(
       matchId: 'm4',
       homeTeam: 'Bayer Leverkusen',
-      awayTeam: 'Borussia Dortmund',
-      homeTeamBadge: '',
-      awayTeamBadge: 'assets/icons/germany_borussia-dortmund.football-logos.svg',
+      awayTeam: 'Eintracht Frankfurt',
+      homeTeamBadge: 'assets/icons/germany_bayer-leverkusen.football-logos.svg',
+      awayTeamBadge: 'assets/icons/germany_eintracht-frankfurt.football-logos.svg',
       league: 'Bundesliga',
       matchTime: '20:30',
       matchDate: 'Sat, Jun 28',
@@ -604,10 +737,8 @@ class ArenaController extends GetxController {
     _matchCountdownTimer?.cancel();
     _matchWsSub?.cancel();
     _roomWsSub?.cancel();
-    _dflEventSub?.cancel();
     _matchWs.disconnect();
     _roomWs.disconnect();
-    dflEventService.dispose();
     super.onClose();
   }
 }

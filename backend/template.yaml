@@ -282,17 +282,82 @@ Resources:
         Variables:
           CONNECTIONS_TABLE: !Ref ConnectionsTable
           MATCH_STATE_TABLE: !Ref MatchStateTable
+          QUESTIONS_TABLE: !Ref QuestionsTable
           WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-          BEDROCK_ENDPOINT: 'https://ijkd9ntd62.execute-api.us-east-1.amazonaws.com/ai'
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref MatchStateTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QuestionsTable
         - Statement:
             - Effect: Allow
               Action: execute-api:ManageConnections
               Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+                - bedrock:Converse
+              Resource: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0'
+        - Statement:
+            - Effect: Allow
+              Action:
+                - aws-marketplace:ViewSubscriptions
+                - aws-marketplace:Subscribe
+              Resource: '*'
+
+  QuestionResolverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: question-trigger.resolveQuestions
+      CodeUri: functions/
+      Timeout: 120
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE: !Ref ConnectionsTable
+          MATCH_STATE_TABLE: !Ref MatchStateTable
+          QUESTIONS_TABLE: !Ref QuestionsTable
+          WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MatchStateTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QuestionsTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+                - bedrock:InvokeModelWithResponseStream
+                - bedrock:Converse
+              Resource: 'arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0'
+
+  QuestionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-questions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: matchId
+          AttributeType: S
+        - AttributeName: questionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: matchId
+          KeyType: HASH
+        - AttributeName: questionId
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
 
   # ─── WebSocket API ─────────────────────────────────────────────
 
@@ -439,6 +504,14 @@ Outputs:
   QuestionTriggerFunctionName:
     Description: Question trigger function name
     Value: !Ref QuestionTriggerFunction
+
+  QuestionResolverFunctionName:
+    Description: Question resolver function name
+    Value: !Ref QuestionResolverFunction
+
+  QuestionsTableName:
+    Description: Questions table
+    Value: !Ref QuestionsTable
 
   MatchStateTableName:
     Description: Match state buffer table

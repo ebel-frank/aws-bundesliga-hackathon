@@ -6,7 +6,7 @@ import 'package:get/get.dart';
 import '../../app/theme/app_colors.dart';
 import 'controllers/arena_controller.dart';
 import 'widgets/countdown_timer_widget.dart';
-import 'widgets/rival_lockin_row_widget.dart';
+import 'widgets/live_chat_widget.dart';
 import 'widgets/round_result_overlay_widget.dart';
 
 class ArenaPredictionView extends StatefulWidget {
@@ -61,6 +61,7 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
         _showExitConfirmation(context);
       },
       child: Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
@@ -106,17 +107,18 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                   const SizedBox(height: 20),
                   // Question + options
                   Expanded(child: _buildQuestionCard()),
-                  const SizedBox(height: 12),
-                  // Squad status — ranked by XP
-                  Obx(() => RivalLockInRowWidget(
-                        picks: controller.roundPicks,
-                        players: List.of(controller.leaderboard)
-                          ..sort((a, b) => b.totalXP.compareTo(a.totalXP)),
-                      )),
-                  const SizedBox(height: 16),
+                  // Bottom spacing for chat overlay
+                  const SizedBox(height: 60),
                 ],
               ),
             ),
+          ),
+          // Live chat & reactions overlay (positioned at bottom, moves above keyboard)
+          Positioned(
+            left: 12,
+            right: 12,
+            bottom: MediaQuery.of(context).viewInsets.bottom + MediaQuery.of(context).padding.bottom + 8,
+            child: const LiveChatWidget(),
           ),
           // Round result overlay
           Obx(() {
@@ -158,46 +160,97 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
   }
 
   Widget _buildTopBar() {
-    return Row(
-      children: [
-        Image.asset(
-          'assets/images/football.png',
-          width: 24,
-          height: 24,
-          errorBuilder: (_, __, ___) => const Icon(Icons.sports_soccer, size: 24, color: AppColors.arenaAccent),
+    return Obx(() {
+      final members = controller.squad.value?.members ?? [];
+      final sorted = List.of(members)..sort((a, b) => b.totalXP.compareTo(a.totalXP));
+
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: AppColors.cardSurface.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: AppColors.cardBorder),
         ),
-        const SizedBox(width: 10),
-        Obx(() => Text(
-              'ROUND ${controller.currentRoundIndex.value + 1}',
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
-            )),
-        Obx(() => Text(
-              ' / ${controller.totalRounds.value}',
-              style: const TextStyle(fontSize: 14, color: AppColors.textMuted),
-            )),
-        const Spacer(),
-        Obx(() => Row(
-              children: List.generate(
-                controller.totalRounds.value,
-                (i) => Container(
-                  width: 8,
-                  height: 8,
-                  margin: const EdgeInsets.symmetric(horizontal: 2),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: i <= controller.currentRoundIndex.value ? AppColors.arenaAccent : AppColors.cardBorder,
-                  ),
+        child: Row(
+          children: [
+            Expanded(
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: sorted.map((player) => Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircleAvatar(
+                          radius: 12,
+                          backgroundColor: player.avatarColor,
+                          child: Text(
+                            player.initials,
+                            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.white),
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          player.displayName.length > 8
+                              ? '${player.displayName.substring(0, 8)}.'
+                              : player.displayName,
+                          style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          '${player.totalXP}',
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.arenaAccent),
+                        ),
+                      ],
+                    ),
+                  )).toList(),
                 ),
               ),
-            )),
-      ],
-    );
+            ),
+          ],
+        ),
+      );
+    });
   }
 
   Widget _buildQuestionCard() {
     return Obx(() {
       final round = controller.activeRound.value;
-      if (round == null) return const SizedBox.shrink();
+      if (round == null) {
+        return Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(
+                width: 40,
+                height: 40,
+                child: CircularProgressIndicator(
+                  color: AppColors.arenaAccent,
+                  strokeWidth: 3,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Waiting for next question...',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Obx(() => controller.latestEventSummary.value.isNotEmpty
+                  ? Text(
+                      controller.latestEventSummary.value,
+                      style: const TextStyle(fontSize: 12, color: AppColors.textMuted),
+                      textAlign: TextAlign.center,
+                    )
+                  : const SizedBox.shrink()),
+            ],
+          ),
+        );
+      }
 
       return SingleChildScrollView(
         child: Column(
@@ -289,7 +342,8 @@ class _AnswerButtonState extends State<_AnswerButton> {
         duration: const Duration(milliseconds: 100),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 200),
-          height: 58,
+          constraints: const BoxConstraints(minHeight: 58),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(14),
             color: isChosen ? AppColors.arenaAccent : AppColors.cardSurface,
@@ -310,12 +364,15 @@ class _AnswerButtonState extends State<_AnswerButton> {
                   const Icon(Icons.check_circle, size: 18, color: Colors.white),
                   const SizedBox(width: 8),
                 ],
-                Text(
-                  widget.label,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.bold,
-                    color: isChosen ? Colors.white : AppColors.textPrimary,
+                Flexible(
+                  child: Text(
+                    widget.label,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      color: isChosen ? Colors.white : AppColors.textPrimary,
+                    ),
+                    textAlign: TextAlign.center,
                   ),
                 ),
               ],

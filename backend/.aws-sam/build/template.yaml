@@ -238,6 +238,20 @@ Resources:
             Method: get
     Metadata:
       SamResourceId: GetRoundsFunction
+  MatchStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-match-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: matchId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: matchId
+        KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
   DflEventsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -250,6 +264,8 @@ Resources:
             Ref: ConnectionsTable
           WS_ENDPOINT:
             Fn::Sub: https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+          QUESTION_TRIGGER_FUNCTION:
+            Ref: QuestionTriggerFunction
       Policies:
       - DynamoDBCrudPolicy:
           TableName:
@@ -261,8 +277,119 @@ Resources:
           Action: execute-api:ManageConnections
           Resource:
             Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+      - Statement:
+        - Effect: Allow
+          Action: lambda:InvokeFunction
+          Resource:
+            Fn::GetAtt:
+            - QuestionTriggerFunction
+            - Arn
     Metadata:
       SamResourceId: DflEventsFunction
+  QuestionTriggerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: question-trigger.handler
+      CodeUri: QuestionTriggerFunction
+      Timeout: 120
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE:
+            Ref: ConnectionsTable
+          MATCH_STATE_TABLE:
+            Ref: MatchStateTable
+          QUESTIONS_TABLE:
+            Ref: QuestionsTable
+          WS_ENDPOINT:
+            Fn::Sub: https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: ConnectionsTable
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: MatchStateTable
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: QuestionsTable
+      - Statement:
+        - Effect: Allow
+          Action: execute-api:ManageConnections
+          Resource:
+            Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+      - Statement:
+        - Effect: Allow
+          Action:
+          - bedrock:InvokeModel
+          - bedrock:InvokeModelWithResponseStream
+          - bedrock:Converse
+          Resource: arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0
+      - Statement:
+        - Effect: Allow
+          Action:
+          - aws-marketplace:ViewSubscriptions
+          - aws-marketplace:Subscribe
+          Resource: '*'
+    Metadata:
+      SamResourceId: QuestionTriggerFunction
+  QuestionResolverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: question-trigger.resolveQuestions
+      CodeUri: QuestionResolverFunction
+      Timeout: 120
+      Environment:
+        Variables:
+          CONNECTIONS_TABLE:
+            Ref: ConnectionsTable
+          MATCH_STATE_TABLE:
+            Ref: MatchStateTable
+          QUESTIONS_TABLE:
+            Ref: QuestionsTable
+          WS_ENDPOINT:
+            Fn::Sub: https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod
+      Policies:
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: ConnectionsTable
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: MatchStateTable
+      - DynamoDBCrudPolicy:
+          TableName:
+            Ref: QuestionsTable
+      - Statement:
+        - Effect: Allow
+          Action: execute-api:ManageConnections
+          Resource:
+            Fn::Sub: arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*
+      - Statement:
+        - Effect: Allow
+          Action:
+          - bedrock:InvokeModel
+          - bedrock:InvokeModelWithResponseStream
+          - bedrock:Converse
+          Resource: arn:aws:bedrock:us-east-1::foundation-model/amazon.nova-lite-v1:0
+    Metadata:
+      SamResourceId: QuestionResolverFunction
+  QuestionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: lpa-questions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+      - AttributeName: matchId
+        AttributeType: S
+      - AttributeName: questionId
+        AttributeType: S
+      KeySchema:
+      - AttributeName: matchId
+        KeyType: HASH
+      - AttributeName: questionId
+        KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
   WebSocketApi:
     Type: AWS::ApiGatewayV2::Api
     Properties:
@@ -412,3 +539,23 @@ Outputs:
   RoundsTableName:
     Value:
       Ref: RoundsTable
+  DflEventsFunctionName:
+    Description: DFL Events stream processor function name
+    Value:
+      Ref: DflEventsFunction
+  QuestionTriggerFunctionName:
+    Description: Question trigger function name
+    Value:
+      Ref: QuestionTriggerFunction
+  QuestionResolverFunctionName:
+    Description: Question resolver function name
+    Value:
+      Ref: QuestionResolverFunction
+  QuestionsTableName:
+    Description: Questions table
+    Value:
+      Ref: QuestionsTable
+  MatchStateTableName:
+    Description: Match state buffer table
+    Value:
+      Ref: MatchStateTable

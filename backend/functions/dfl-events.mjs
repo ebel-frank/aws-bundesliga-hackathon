@@ -4,7 +4,7 @@ import { DynamoDBDocumentClient, ScanCommand, DeleteCommand } from '@aws-sdk/lib
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
-const s3 = new S3Client({});
+const s3 = new S3Client({ region: 'eu-central-1' });
 const ddbClient = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(ddbClient);
 const lambdaClient = new LambdaClient({});
@@ -37,7 +37,7 @@ const QUESTION_TRIGGER_FUNCTION = process.env.QUESTION_TRIGGER_FUNCTION;
  */
 export const processEvents = async (event) => {
   try {
-    const { bucket, eventsKey, matchInfoKey, matchId, roomCode, delayMs = 3000 } = event;
+    const { bucket, eventsKey, matchInfoKey, matchId, roomCode, delayMs = 3000, maxEvents = 0 } = event;
 
     // Support legacy 'key' parameter
     const effectiveEventsKey = eventsKey || event.key;
@@ -69,30 +69,29 @@ export const processEvents = async (event) => {
     const events = parseXmlEvents(xmlString, matchId, playerLookup, teamLookup);
     console.log(`Parsed ${events.length} events`);
 
-    if (events.length === 0) {
+    // Limit events for testing
+    const streamEvents = maxEvents > 0 ? events.slice(0, maxEvents) : events;
+    console.log(`Streaming ${streamEvents.length} events (maxEvents=${maxEvents || 'all'})`);
+
+    if (streamEvents.length === 0) {
       return { statusCode: 200, body: JSON.stringify({ message: 'No events found', eventsProcessed: 0 }) };
     }
 
-    // 3. Get WebSocket connections
+    // 3. Determine target room codes
     const targetRoomCode = roomCode || `match_${matchId}`;
-    const connections = await getConnections(targetRoomCode);
-
-    // Also get match-level connections
-    const matchConnections = roomCode ? await getConnections(`match_${matchId}`) : [];
-    const allConnections = [...connections, ...matchConnections];
-    console.log(`Broadcasting to ${allConnections.length} connections`);
 
     // 4. Send match info first (so clients know the context)
     if (matchInfo) {
+      const allConnections = await getAllConnections(targetRoomCode, matchId, roomCode);
       await broadcastToConnections(allConnections, {
         action: 'match_info',
         data: { matchInfo, players: playerLookup, teams: teamLookup },
       });
     }
 
-    // 5. Stream events with delay
-    for (let i = 0; i < events.length; i++) {
-      const dflEvent = events[i];
+    // 5. Stream events with delay — re-fetch connections each time for reconnects
+    for (let i = 0; i < streamEvents.length; i++) {
+      const dflEvent = streamEvents[i];
 
       // Invoke Question Trigger Lambda (async — doesn't block streaming)
       if (QUESTION_TRIGGER_FUNCTION) {
@@ -118,24 +117,69 @@ export const processEvents = async (event) => {
         data: {
           event: dflEvent,
           eventIndex: i + 1,
-          totalEvents: events.length,
+          totalEvents: streamEvents.length,
         },
       };
 
+      // Re-fetch connections each event so reconnected clients are included
+      const allConnections = await getAllConnections(targetRoomCode, matchId, roomCode);
       await broadcastToConnections(allConnections, message);
 
+      // If this is the FinalWhistle (second half), trigger question resolution
+      if (dflEvent.eventType === 'FinalWhistle' && dflEvent.gameSection === 'secondHalf' && QUESTION_TRIGGER_FUNCTION) {
+        console.log('Final whistle detected — triggering question resolution...');
+        // Small delay to let the last question trigger finish
+        await sleep(3000);
+        await lambdaClient.send(new InvokeCommand({
+          FunctionName: QUESTION_TRIGGER_FUNCTION,
+          InvocationType: 'RequestResponse',
+          Payload: Buffer.from(JSON.stringify({
+            resolve: true,
+            matchId,
+            roomCode: targetRoomCode,
+            matchSummary: matchInfo,
+          })),
+        }));
+        console.log('Question resolution triggered');
+      }
+
       // Delay between events
-      if (i < events.length - 1 && delayMs > 0) {
+      if (i < streamEvents.length - 1 && delayMs > 0) {
         await sleep(delayMs);
       }
     }
+
+    // If we finished all events without a FinalWhistle trigger, resolve questions anyway
+    const hadFinalWhistle = streamEvents.some(e => e.eventType === 'FinalWhistle' && e.gameSection === 'secondHalf');
+    if (!hadFinalWhistle && QUESTION_TRIGGER_FUNCTION) {
+      console.log('All events streamed without FinalWhistle — triggering resolution...');
+      await sleep(3000);
+      await lambdaClient.send(new InvokeCommand({
+        FunctionName: QUESTION_TRIGGER_FUNCTION,
+        InvocationType: 'RequestResponse',
+        Payload: Buffer.from(JSON.stringify({
+          resolve: true,
+          matchId,
+          roomCode: targetRoomCode,
+          matchSummary: matchInfo,
+        })),
+      }));
+      console.log('End-of-stream resolution triggered');
+    }
+
+    // Broadcast match_ended to all connections
+    const finalConnections = await getAllConnections(targetRoomCode, matchId, roomCode);
+    await broadcastToConnections(finalConnections, {
+      action: 'match_ended',
+      data: { matchId, totalEvents: streamEvents.length },
+    });
+    console.log('match_ended broadcast sent');
 
     return {
       statusCode: 200,
       body: JSON.stringify({
         message: 'Events processed successfully',
-        eventsProcessed: events.length,
-        connectionsNotified: allConnections.length,
+        eventsProcessed: streamEvents.length,
         playersLoaded: Object.keys(playerLookup).length,
       }),
     };
@@ -246,14 +290,69 @@ function parseXmlEvents(xmlString, matchId, playerLookup, teamLookup) {
       event.eventType = 'KickOff';
       const gsMatch = innerXml.match(/GameSection="([^"]+)"/);
       event.gameSection = gsMatch ? gsMatch[1] : null;
-    } else if (innerXml.includes('<Goal')) {
+    } else if (innerXml.includes('<SuccessfulShot')) {
       event.eventType = 'Goal';
-    } else if (innerXml.includes('<Card')) {
+    } else if (innerXml.includes('<Penalty')) {
+      event.eventType = 'Penalty';
+    } else if (innerXml.includes('<Caution')) {
       event.eventType = 'Card';
+      const colorMatch = innerXml.match(/CardColor="([^"]+)"/);
+      event.cardColor = colorMatch ? colorMatch[1] : 'yellow';
     } else if (innerXml.includes('<Substitution')) {
       event.eventType = 'Substitution';
+    } else if (innerXml.includes('<CornerKick')) {
+      event.eventType = 'Play';
+      event.subType = 'Corner';
+    } else if (innerXml.includes('<FreeKick')) {
+      event.eventType = 'Play';
+      event.subType = 'Freekick';
+    } else if (innerXml.includes('<SavedShot')) {
+      event.eventType = 'Play';
+      event.subType = 'Shot';
+      event.evaluation = 'savedByGoalkeeper';
+    } else if (innerXml.includes('<ShotWide') || innerXml.includes('<BlockedShot')) {
+      event.eventType = 'Play';
+      event.subType = 'Shot';
+      event.evaluation = innerXml.includes('<ShotWide') ? 'wide' : 'blocked';
+    } else if (innerXml.includes('<ShotAtGoal')) {
+      // Shot at goal without SuccessfulShot = saved/blocked/wide
+      event.eventType = 'Play';
+      event.subType = 'Shot';
+      if (innerXml.includes('<SavedShot')) event.evaluation = 'savedByGoalkeeper';
+      else if (innerXml.includes('<BlockedShot')) event.evaluation = 'blocked';
+      else if (innerXml.includes('<ShotWide')) event.evaluation = 'wide';
+    } else if (innerXml.includes('<FinalWhistle')) {
+      event.eventType = 'FinalWhistle';
+      const resultMatch = innerXml.match(/FinalResult="([^"]+)"/);
+      event.finalResult = resultMatch ? resultMatch[1] : '';
+      const sectionMatch = innerXml.match(/GameSection="([^"]+)"/);
+      event.gameSection = sectionMatch ? sectionMatch[1] : '';
+    } else if (innerXml.includes('<ThrowIn')) {
+      event.eventType = 'Play';
+      event.subType = 'ThrowIn';
+    } else if (innerXml.includes('<GoalKick')) {
+      event.eventType = 'Play';
+      event.subType = 'GoalKick';
     } else if (innerXml.includes('<Play')) {
       event.eventType = 'Play';
+    } else if (innerXml.includes('<TacklingGame')) {
+      event.eventType = 'Tackle';
+    } else if (innerXml.includes('<OtherBallAction')) {
+      event.eventType = 'BallAction';
+    } else if (innerXml.includes('<Foul')) {
+      event.eventType = 'Foul';
+    } else if (innerXml.includes('<Delete')) {
+      event.eventType = 'Delete';
+    } else if (innerXml.includes('<Offside')) {
+      event.eventType = 'Offside';
+    } else if (innerXml.includes('<BallClaiming')) {
+      event.eventType = 'BallClaiming';
+    } else if (innerXml.includes('<VideoAssistantAction')) {
+      event.eventType = 'VAR';
+    } else if (innerXml.includes('<AdditionalTimeDisplayed')) {
+      event.eventType = 'AdditionalTime';
+    } else if (innerXml.includes('<Nutmeg') || innerXml.includes('<SpectacularPlay') || innerXml.includes('<Run') || innerXml.includes('<PlayerNotSentOff') || innerXml.includes('<OtherPlayerAction') || innerXml.includes('<RefereeBall')) {
+      event.eventType = 'Other';
     } else {
       event.eventType = 'Unknown';
     }
@@ -262,25 +361,26 @@ function parseXmlEvents(xmlString, matchId, playerLookup, teamLookup) {
     const playMatch = innerXml.match(/<Play\s([^>]+)/);
     if (playMatch) {
       const playAttrs = parseAttributes(playMatch[1]);
-      event.teamId = playAttrs['Team'] || null;
-      event.playerId = playAttrs['Player'] || null;
+      event.teamId = playAttrs['Team'] || event.teamId || null;
+      event.playerId = playAttrs['Player'] || event.playerId || null;
       event.recipientId = playAttrs['Recipient'] || null;
-      event.evaluation = playAttrs['Evaluation'] || null;
+      // Don't overwrite evaluation if already set by event type detection
+      if (!event.evaluation) event.evaluation = playAttrs['Evaluation'] || null;
       event.distance = playAttrs['Distance'] || null;
       event.height = playAttrs['Height'] || null;
       event.playOrigin = playAttrs['PlayOrigin'] || null;
       event.penaltyBox = playAttrs['PenaltyBox'] === 'true';
     }
 
-    // Determine sub-type
-    if (innerXml.includes('<Pass')) event.subType = 'Pass';
-    else if (innerXml.includes('<Shot')) event.subType = 'Shot';
-    else if (innerXml.includes('<Cross')) event.subType = 'Cross';
-    else if (innerXml.includes('<Header')) event.subType = 'Header';
-    else if (innerXml.includes('<Tackle')) event.subType = 'Tackle';
-    else if (innerXml.includes('<Freekick')) event.subType = 'Freekick';
-    else if (innerXml.includes('<Corner')) event.subType = 'Corner';
-    else if (innerXml.includes('<ThrowIn')) event.subType = 'ThrowIn';
+    // Determine sub-type (only if not already set above)
+    if (!event.subType) {
+      if (innerXml.includes('<Pass')) event.subType = 'Pass';
+      else if (innerXml.includes('<ShotAtGoal')) event.subType = 'Shot';
+      else if (innerXml.includes('<Cross')) event.subType = 'Cross';
+      else if (innerXml.includes('<Header')) event.subType = 'Header';
+      else if (innerXml.includes('<Tackle')) event.subType = 'Tackle';
+      else if (innerXml.includes('<ThrowIn')) event.subType = 'ThrowIn';
+    }
 
     // Enrich with player/team names
     event.playerName = resolvePlayerName(event.playerId, playerLookup);
@@ -316,11 +416,23 @@ function generateSummary(event) {
       return `⚽ Kick Off! (${event.gameSection || 'unknown'})`;
     case 'Goal':
       return `🎉 GOAL! ${player} scores for ${team}!`;
+    case 'Penalty':
+      return `⚠️ PENALTY! ${player} (${team})`;
     case 'Card':
-      return `🟨 Card for ${player} (${team})`;
+      return `🟨 ${event.cardColor === 'red' ? '🟥 Red' : 'Yellow'} Card for ${player} (${team})`;
     case 'Substitution':
       return `🔄 Substitution: ${player} (${team})`;
+    case 'FinalWhistle':
+      return `🏁 Final Whistle! (${event.gameSection || ''}) Result: ${event.finalResult || ''}`;
     case 'Play': {
+      if (event.subType === 'Corner') return `🚩 Corner kick (${team})`;
+      if (event.subType === 'Freekick') return `🎯 Free kick (${team})`;
+      if (event.subType === 'Shot') {
+        if (event.evaluation === 'savedByGoalkeeper') return `🧤 Shot saved! ${player} (${team})`;
+        if (event.evaluation === 'wide') return `💨 Shot wide! ${player} (${team})`;
+        if (event.evaluation === 'blocked') return `🛡️ Shot blocked! ${player} (${team})`;
+        return `⚡ Shot! ${player} (${team})`;
+      }
       const result = event.evaluation === 'successfullyCompleted' ? '✓' : '✗';
       const type = event.subType || 'Play';
       return `${result} ${type}: ${player} → ${recipient} (${event.distance || '?'}, ${team})`;
@@ -338,6 +450,12 @@ function parseAttributes(attrString) {
     attrs[m[1]] = m[2];
   }
   return attrs;
+}
+
+async function getAllConnections(targetRoomCode, matchId, roomCode) {
+  const connections = await getConnections(targetRoomCode);
+  const matchConnections = roomCode ? await getConnections(`match_${matchId}`) : [];
+  return [...connections, ...matchConnections];
 }
 
 async function getConnections(roomCode) {

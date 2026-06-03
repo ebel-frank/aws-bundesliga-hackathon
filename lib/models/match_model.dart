@@ -51,4 +51,19 @@ class MatchModel {
     'status': status,
     'roomCount': roomCount,
   };
+
+  MatchModel copyWith({int? roomCount, String? status}) {
+    return MatchModel(
+      matchId: matchId,
+      homeTeam: homeTeam,
+      awayTeam: awayTeam,
+      homeTeamBadge: homeTeamBadge,
+      awayTeamBadge: awayTeamBadge,
+      league: league,
+      matchTime: matchTime,
+      matchDate: matchDate,
+      status: status ?? this.status,
+      roomCount: roomCount ?? this.roomCount,
+    );
+  }
 }
