@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../../app/routes/app_routes.dart';
@@ -78,6 +77,14 @@ class ArenaController extends GetxController {
 
   /// Stores the user's picks: questionId → selected option
   final Map<String, String> _userPicks = {};
+
+  /// Questions whose live timer expired before the user answered. They remain
+  /// answerable (for minimum/catch-up points) from the "Missed Questions"
+  /// section until the server resolves them.
+  final RxList<PredictionRoundModel> missedQuestions = <PredictionRoundModel>[].obs;
+
+  /// Question ids already resolved by the server (so we never re-surface them).
+  final Set<String> _resolvedQuestionIds = {};
 
   // ── Active prediction round ───────────────────────────────────
   final Rx<PredictionRoundModel?> activeRound = Rx<PredictionRoundModel?>(null);
@@ -264,6 +271,12 @@ class ArenaController extends GetxController {
     //    Find a result the local user actually answered, preferring the last one.
     for (final result in results.reversed) {
       final questionId = result['questionId'] as String? ?? '';
+      if (questionId.isEmpty) continue;
+
+      // Mark resolved + drop from the missed list (can no longer be answered).
+      _resolvedQuestionIds.add(questionId);
+      missedQuestions.removeWhere((q) => q.roundId == questionId);
+
       final myPickForQ = _userPicks[questionId];
       if (myPickForQ == null) continue;
 
@@ -286,8 +299,9 @@ class ArenaController extends GetxController {
         activeRound.value = null;
       }
 
-      // Show the result overlay briefly, then return to waiting for the next Q.
-      if (currentScreen.value != ArenaScreen.end) {
+      // Don't cover a live question the player is mid-answering with the overlay.
+      final hasLiveQuestion = activeRound.value != null;
+      if (currentScreen.value != ArenaScreen.end && !hasLiveQuestion) {
         currentScreen.value = ArenaScreen.roundResult;
         Future.delayed(const Duration(seconds: 3), () {
           if (currentScreen.value == ArenaScreen.roundResult) {
@@ -578,6 +592,8 @@ class ArenaController extends GetxController {
     currentRoundIndex.value = -1;
     activeRound.value = null;
     _userPicks.clear();
+    missedQuestions.clear();
+    _resolvedQuestionIds.clear();
     chatMessages.clear();
     floatingReactions.clear();
 
@@ -634,48 +650,54 @@ class ArenaController extends GetxController {
     _startCountdown();
   }
 
-  /// Player locks in their answer. Sends the pick to the server immediately
-  /// for real-time scoring. Kick-off questions (category 'kickoff') may be
-  /// changed until resolved — at a points penalty applied server-side.
+  /// Player locks in their answer to the ACTIVE question. Sends the pick to the
+  /// server for real-time scoring and immediately dismisses the question so it
+  /// stops displaying (the next question can take the slot).
   void lockInPick(String option) {
     final round = activeRound.value;
     if (round == null) return;
-
-    final isKickoff = round.category == 'kickoff';
-    // Non-kickoff questions lock once; kickoff questions allow changes.
-    if (hasLockedIn.value && !isKickoff) return;
-    // No-op if re-selecting the same option.
-    if (hasLockedIn.value && myPick.value == option) return;
-
-    final isChange = hasLockedIn.value && myPick.value != option;
+    if (hasLockedIn.value) return; // already answered this one
 
     myPick.value = option;
     hasLockedIn.value = true;
     _userPicks[round.roundId] = option;
 
     final secondsTaken = round.timeLimitSeconds - countdownSeconds.value;
+    _sendPick(round.roundId, option, secondsTaken < 0 ? 0 : secondsTaken);
 
+    // Dismiss immediately — stop displaying the answered question.
+    _countdownTimer?.cancel();
+    inCatchUp.value = false;
+    activeRound.value = null;
+  }
+
+  /// Answer a question from the "Missed Questions" section. Sends the pick as a
+  /// late (catch-up) answer and removes it from the missed list right away.
+  void answerMissedQuestion(String questionId, String option) {
+    final idx = missedQuestions.indexWhere((q) => q.roundId == questionId);
+    if (idx == -1) return;
+    final round = missedQuestions[idx];
+
+    _userPicks[questionId] = option;
+    // secondsTaken beyond the limit marks this as a late/catch-up answer server-side.
+    _sendPick(questionId, option, round.timeLimitSeconds + 1);
+
+    missedQuestions.removeAt(idx);
+  }
+
+  /// Send a pick to the server over the room WebSocket.
+  void _sendPick(String questionId, String option, int secondsTaken) {
     _roomWs.send(
       action: 'submit_pick',
       roomCode: squad.value?.roomCode ?? '',
       data: {
         'matchId': selectedMatch.value?.matchId ?? '',
-        'questionId': round.roundId,
+        'questionId': questionId,
         'userId': _currentUserId,
         'pick': option,
-        'secondsTaken': secondsTaken < 0 ? 0 : secondsTaken,
+        'secondsTaken': secondsTaken,
       },
     );
-
-    if (isChange) {
-      Get.snackbar(
-        'Answer changed',
-        'Changing a kick-off prediction costs a few points.',
-        snackPosition: SnackPosition.BOTTOM,
-        duration: const Duration(seconds: 2),
-        margin: const EdgeInsets.all(12),
-      );
-    }
   }
 
   /// Alert the user that a new question has arrived — vibrate + system sound.
@@ -703,13 +725,26 @@ class ArenaController extends GetxController {
     });
   }
 
-  /// Called when the per-question live timer hits 0. Rather than clearing the
-  /// question, we enter "catch-up" mode: it stays answerable for minimum points
-  /// until the server resolves it (which arrives via `questions_resolved`).
+  /// Called when the per-question live timer hits 0.
+  /// - If the user already answered: just clear the active slot (wait for the
+  ///   server's resolution to score it).
+  /// - If the user did NOT answer: move it into the "Missed Questions" section
+  ///   so they can still answer it for minimum points, and free the active slot
+  ///   for the next incoming question.
   void _closeRound() {
     _countdownTimer?.cancel();
-    if (activeRound.value == null) return;
-    inCatchUp.value = true;
+    final round = activeRound.value;
+    if (round == null) return;
+
+    final answered = _userPicks.containsKey(round.roundId);
+    if (!answered && !_resolvedQuestionIds.contains(round.roundId)) {
+      if (missedQuestions.every((q) => q.roundId != round.roundId)) {
+        missedQuestions.add(round);
+      }
+    }
+
+    inCatchUp.value = false;
+    activeRound.value = null;
   }
 
   /// Called after all rounds complete. Finalizes game, calculates badges,

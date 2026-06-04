@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../app/theme/app_colors.dart';
+import '../../models/prediction_round_model.dart';
 import 'controllers/arena_controller.dart';
 import 'widgets/countdown_timer_widget.dart';
 import 'widgets/live_chat_widget.dart';
@@ -101,14 +102,12 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                   const SizedBox(height: 12),
                   // Top bar
                   _buildTopBar(),
-                  const SizedBox(height: 20),
-                  // Countdown timer (or catch-up banner once it expires)
-                  Obx(() {
-                    if (controller.inCatchUp.value && controller.activeRound.value != null) {
-                      return _buildCatchUpBanner();
-                    }
-                    return CountdownTimerWidget(seconds: controller.countdownSeconds.value);
-                  }),
+                  const SizedBox(height: 12),
+                  // Missed questions banner (tap to answer for catch-up points)
+                  _buildMissedQuestionsBar(context),
+                  const SizedBox(height: 8),
+                  // Countdown timer
+                  Obx(() => CountdownTimerWidget(seconds: controller.countdownSeconds.value)),
                   const SizedBox(height: 20),
                   // Question + options
                   Expanded(child: _buildQuestionCard()),
@@ -164,27 +163,96 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
     );
   }
 
-  Widget _buildCatchUpBanner() {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFB300).withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
-      ),
-      child: const Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(Icons.bolt, size: 18, color: Color(0xFFFFB300)),
-          SizedBox(width: 8),
-          Flexible(
-            child: Text(
-              "Time's up — last chance! Answer now for minimum points.",
-              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFFFB300)),
-              textAlign: TextAlign.center,
-            ),
+  /// A tappable banner showing how many questions the player missed. Tapping
+  /// opens a sheet where each missed question can still be answered for
+  /// minimum (catch-up) points, until the server resolves it.
+  Widget _buildMissedQuestionsBar(BuildContext context) {
+    return Obx(() {
+      final count = controller.missedQuestions.length;
+      if (count == 0) return const SizedBox.shrink();
+      return GestureDetector(
+        onTap: () => _showMissedQuestionsSheet(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFB300).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
           ),
-        ],
+          child: Row(
+            children: [
+              const Icon(Icons.history_toggle_off, size: 18, color: Color(0xFFFFB300)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$count missed ${count == 1 ? 'question' : 'questions'} — tap to catch up',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFFFB300)),
+                ),
+              ),
+              const Icon(Icons.chevron_right, size: 18, color: Color(0xFFFFB300)),
+            ],
+          ),
+        ),
+      );
+    });
+  }
+
+  void _showMissedQuestionsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.cardSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.75),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.cardBorder, borderRadius: BorderRadius.circular(2))),
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.bolt, size: 20, color: Color(0xFFFFB300)),
+                    SizedBox(width: 8),
+                    Text('Catch up on missed questions', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Answer now for minimum points before they resolve.', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: Obx(() {
+                  final missed = controller.missedQuestions;
+                  if (missed.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('All caught up! 🎉', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                    );
+                  }
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.all(16),
+                    itemCount: missed.length,
+                    separatorBuilder: (_, __) => const Divider(color: AppColors.cardBorder, height: 24),
+                    itemBuilder: (_, i) => _MissedQuestionTile(round: missed[i], controller: controller),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -410,6 +478,93 @@ class _AnswerButtonState extends State<_AnswerButton> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A single missed question shown in the catch-up sheet. Selecting an option
+/// submits it as a late answer (minimum points) and removes it from the list.
+class _MissedQuestionTile extends StatefulWidget {
+  const _MissedQuestionTile({required this.round, required this.controller});
+
+  final PredictionRoundModel round;
+  final ArenaController controller;
+
+  @override
+  State<_MissedQuestionTile> createState() => _MissedQuestionTileState();
+}
+
+class _MissedQuestionTileState extends State<_MissedQuestionTile> {
+  String? _selected;
+  bool _submitted = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final round = widget.round;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFB300).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                round.category.toUpperCase(),
+                style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFFFFB300), letterSpacing: 0.8),
+              ),
+            ),
+            const Spacer(),
+            const Text('catch-up · min points', style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          round.questionText,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: round.options.map((option) {
+            final isSel = _selected == option;
+            return GestureDetector(
+              onTap: _submitted
+                  ? null
+                  : () {
+                      setState(() {
+                        _selected = option;
+                        _submitted = true;
+                      });
+                      widget.controller.answerMissedQuestion(round.roundId, option);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Answer submitted for catch-up points'), duration: Duration(seconds: 2)),
+                      );
+                    },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isSel ? AppColors.arenaAccent : AppColors.background,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: isSel ? AppColors.arenaAccent : AppColors.cardBorder),
+                ),
+                child: Text(
+                  option,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isSel ? Colors.white : AppColors.textPrimary,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }

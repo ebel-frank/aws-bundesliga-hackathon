@@ -266,14 +266,21 @@ async function buildAndStoreTemplateQuestion({ matchId, template, dflEvent, ctx 
 async function buildAndStoreAiQuestion({ matchId, dflEvent, ctx }) {
   const trigger = { type: dflEvent.eventType, delayMs: 0 };
   const context = await getMatchContext(matchId);
+  // Compute the LIVE score from events so far — never leak the final result,
+  // which would make AI questions trivial/odd. This is the score at this moment.
+  const live = liveMatchSnapshot(context, ctx);
   // Pass real team names into the prompt (override the anonymised matchInfo).
+  // result is the LIVE score, not matchInfo.result (which is full-time).
   const namedMatchInfo = {
     ...ctx.matchInfo,
     homeTeamName: ctx.homeTeamName,
     guestTeamName: ctx.awayTeamName,
     competitionName: ctx.matchInfo?.competitionName || 'Bundesliga',
+    result: live.scoreline,
+    liveScore: live.scoreline,
+    liveMinute: live.minute,
   };
-  const question = await callBedrock(trigger, dflEvent, context, namedMatchInfo, ctx.playerLookup, ctx.teamLookup);
+  const question = await callBedrock(trigger, dflEvent, context, namedMatchInfo, ctx.playerLookup, ctx.teamLookup, live);
   if (!question || !question.question || !question.options) {
     console.error('Bedrock returned invalid AI question');
     return null;
@@ -350,20 +357,42 @@ export const resolveQuestions = async (event) => {
 
     const resolutions = [];
 
-    // 2a. Deterministic resolution — fair, code-only
+    // 2a. Deterministic resolution — fair, code-only.
+    //     If a deferred template never saw its follow-up event, fall back to the
+    //     negative/last option so the question STILL resolves to a real option
+    //     (otherwise both answers would score 0). Ranked questions must always
+    //     produce a valid option.
     for (const q of templateQs) {
-      const answer = q.knownAnswer ?? resolveTemplate(q, events, ctx);
-      if (answer == null) continue; // not resolvable (shouldn't happen at match end)
+      let answer = q.knownAnswer ?? resolveTemplate(q, events, ctx);
+      if (answer == null) {
+        answer = Array.isArray(q.options) && q.options.length
+          ? q.options[q.options.length - 1]
+          : null;
+      }
+      if (answer == null) continue;
+      // Guarantee the answer is one of the real options.
+      answer = snapToOption(answer, q.options, { fallbackToFirst: true }) ?? answer;
       resolutions.push({ questionId: q.questionId, correctAnswer: answer });
     }
 
     // 2b. AI resolution — only for bonus AI questions
     if (aiQs.length > 0) {
+      let aiResolutions = [];
       try {
-        const aiResolutions = await resolveWithBedrock(aiQs, events, matchSummary);
+        aiResolutions = await resolveWithBedrock(aiQs, events, matchSummary);
         resolutions.push(...aiResolutions);
       } catch (e) {
         console.error('AI resolution failed:', e.message);
+      }
+      // Guarantee every AI question resolves to a real option even if Bedrock
+      // skipped it or failed — otherwise it would score 0 for everyone.
+      const resolvedIds = new Set(aiResolutions.map((r) => r.questionId));
+      for (const q of aiQs) {
+        if (resolvedIds.has(q.questionId)) continue;
+        const fallback = Array.isArray(q.options) && q.options.length ? q.options[0] : null;
+        if (fallback != null) {
+          resolutions.push({ questionId: q.questionId, correctAnswer: fallback });
+        }
       }
     }
 
@@ -554,6 +583,44 @@ function realTeamName(name, id) {
   return TEAM_NAME_OVERRIDES[id] || TEAM_NAME_OVERRIDES[name] || name || 'Team';
 }
 
+/**
+ * Compute a point-in-time snapshot of the match from the buffered events:
+ * the live scoreline, elapsed minute, and short recent-event narrative. Used
+ * to give the AI generator real, CURRENT context (never the full-time result).
+ */
+function liveMatchSnapshot(events = [], ctx = {}) {
+  const goals = events.filter((e) => e.eventType === 'Goal');
+  const homeGoals = goals.filter((g) => g.teamId === ctx.homeTeamId).length;
+  const awayGoals = goals.filter((g) => g.teamId === ctx.awayTeamId).length;
+  const home = ctx.homeTeamName || 'Home';
+  const away = ctx.awayTeamName || 'Away';
+
+  // Elapsed minute relative to the first kick-off.
+  let minute = null;
+  const ko = events.find((e) => e.eventType === 'KickOff');
+  const last = events[events.length - 1];
+  if (ko?.eventTime && last?.eventTime) {
+    const m = (new Date(last.eventTime).getTime() - new Date(ko.eventTime).getTime()) / 60000;
+    if (!Number.isNaN(m) && m >= 0) minute = Math.round(m);
+  }
+
+  // Last few meaningful moments for narrative colour.
+  const notable = new Set(['Goal', 'Card', 'Substitution', 'Penalty', 'Offside']);
+  const recentNarrative = events
+    .filter((e) => notable.has(e.eventType) || e.subType === 'Shot' || e.subType === 'Corner')
+    .slice(-6)
+    .map((e) => e.summary)
+    .filter(Boolean);
+
+  return {
+    homeGoals,
+    awayGoals,
+    scoreline: `${home} ${homeGoals}-${awayGoals} ${away}`,
+    minute,
+    recentNarrative,
+  };
+}
+
 /** Normalise match info into a resolver context with team ids/names. */
 function buildContext(matchInfo, playerLookup, teamLookup) {
   const mi = matchInfo || {};
@@ -729,30 +796,32 @@ STRICT RULES:
   return out.replace(/^["']|["']$/g, '');
 }
 
-async function callBedrock(trigger, dflEvent, recentEvents, matchInfo, playerLookup, teamLookup) {
+async function callBedrock(trigger, dflEvent, recentEvents, matchInfo, playerLookup, teamLookup, live = {}) {
   const match = matchInfo || {};
   const playerName = dflEvent.playerName || resolvePlayer(dflEvent.playerId, playerLookup);
   const teamName = dflEvent.teamName || resolveTeam(dflEvent.teamId, teamLookup);
 
   const systemPrompt = `You are a live football prediction quiz generator for the Bundesliga.
-Generate engaging multiple-choice questions based on real-time match events.
-Questions must be PREDICTIVE (what happens NEXT), not about what already happened.
+You write ONE short, exciting, PREDICTIVE multiple-choice question about what will happen NEXT, anchored to the specific moment just described.
 
-Rules:
-- Choose 2-4 options depending on the question complexity
-- Set a time limit (10-20 seconds) based on how quickly a fan could decide
-- Determine if the answer can be resolved immediately (within the next few events) or must wait until match end
-- Return ONLY valid JSON, no other text
+HARD RULES:
+- The question must be about the FUTURE (next goal, next 10 minutes, rest of half, full time) — never about what already happened.
+- Be SPECIFIC to this moment: name the actual player and/or team in the trigger, and reflect the CURRENT live score and minute. Avoid generic filler like "will it be exciting?".
+- Options must be concrete and mutually exclusive, and one must be clearly verifiable from match events (goals, cards, subs, shots, corners, offsides).
+- 2-4 options. Vary the question shape across calls (over/under counts, who-next, yes/no on a specific player, which-team).
+- Never reveal or assume the final result. Use ONLY the live score given.
+- Keep the question under 120 characters.
+- Return ONLY valid JSON, no markdown, no commentary.
 
 Required JSON format:
 {
   "question": "string",
   "options": ["string", ...],
-  "category": "string",
+  "category": "string (goal|cards|shots|subs|momentum|player)",
   "difficulty": "easy|medium|hard",
   "timeLimit": number,
-  "resolutionType": "immediate|deferred",
-  "resolutionCriteria": "string describing how to determine the correct answer"
+  "resolutionType": "immediate|deferred|endOfMatch",
+  "resolutionCriteria": "string: exactly how to determine the correct option from match events"
 }`;
 
   const userMessage = JSON.stringify({
@@ -760,34 +829,25 @@ Required JSON format:
       competition: match.competitionName || 'Bundesliga',
       homeTeam: match.homeTeamName || 'Home',
       awayTeam: match.guestTeamName || 'Away',
-      score: match.result || '0-0',
-      minute: dflEvent.gameTime || dflEvent.eventTime || '?',
+      liveScore: live.scoreline || match.liveScore || '0-0',
+      minute: live.minute ?? (dflEvent.gameTime || '?'),
       stadium: match.stadiumName || '',
     },
-    trigger: {
+    triggerMoment: {
       type: trigger.type,
       team: teamName,
       player: playerName,
       details: dflEvent.summary || '',
     },
-    recentEvents: recentEvents.slice(-10).map(e => ({
-      type: e.eventType,
-      player: e.player,
-      team: e.team,
-      evaluation: e.evaluation,
-      summary: e.summary,
-    })),
+    recentNarrative: (live.recentNarrative && live.recentNarrative.length)
+      ? live.recentNarrative
+      : recentEvents.slice(-8).map((e) => e.summary).filter(Boolean),
   });
-
-  const payload = {
-    inferenceConfig: { maxTokens: 512 },
-    system: [{ text: systemPrompt }],
-    messages: [{ role: 'user', content: [{ text: userMessage }] }],
-  };
 
   const response = await bedrock.send(new ConverseCommand({
     modelId: MODEL_ID,
-    inferenceConfig: { maxTokens: 512 },
+    // Higher temperature for variety so questions feel fresh, not templated.
+    inferenceConfig: { maxTokens: 512, temperature: 0.9, topP: 0.9 },
     system: [{ text: systemPrompt }],
     messages: [{ role: 'user', content: [{ text: userMessage }] }],
   }));
@@ -855,9 +915,11 @@ Required format:
   try {
     const parsed = JSON.parse(jsonMatch[0]);
     // Snap each AI answer to an actual option string so exact-match scoring works.
+    // fallbackToFirst guarantees a resolvable option (never an unmatchable answer
+    // that would score 0 for everyone).
     return parsed.map((r) => {
       const q = pendingQuestions.find((q) => q.questionId === r.questionId);
-      const snapped = q ? snapToOption(r.correctAnswer, q.options) : r.correctAnswer;
+      const snapped = q ? snapToOption(r.correctAnswer, q.options, { fallbackToFirst: true }) : r.correctAnswer;
       return { ...r, correctAnswer: snapped };
     }).filter((r) => r.correctAnswer != null);
   } catch (e) {
@@ -869,10 +931,13 @@ Required format:
 /**
  * Match an AI-produced answer string to one of the real option strings,
  * tolerating casing/whitespace/punctuation differences. Falls back to a
- * contains-match, else null (so we don't store an unmatchable answer).
+ * contains-match. With { fallbackToFirst: true } it returns the first option
+ * rather than null, guaranteeing a ranked question always resolves to a real
+ * option (so it can never score 0 for everyone due to an unmatchable answer).
  */
-function snapToOption(answer, options = []) {
-  if (!answer || options.length === 0) return answer ?? null;
+function snapToOption(answer, options = [], opts = {}) {
+  if (options.length === 0) return answer ?? null;
+  if (!answer) return opts.fallbackToFirst ? options[0] : null;
   const norm = (s) => String(s).toLowerCase().replace(/[^a-z0-9]/g, '');
   const a = norm(answer);
   // Exact normalised match.
@@ -880,7 +945,8 @@ function snapToOption(answer, options = []) {
   if (exact) return exact;
   // Containment either direction (e.g. "Bayern" vs "Bayern Munich").
   const partial = options.find((o) => norm(o).includes(a) || a.includes(norm(o)));
-  return partial ?? null;
+  if (partial) return partial;
+  return opts.fallbackToFirst ? options[0] : null;
 }
 
 async function bufferEvent(matchId, event) {

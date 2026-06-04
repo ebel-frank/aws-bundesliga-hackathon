@@ -89,8 +89,8 @@ export const TEMPLATES = [
     once: true,
     delayMs: 3000,
     trigger: (ev, state) => ev.eventType === 'KickOff' && !state.kickoffFired,
-    build: () => ({
-      text: 'Over/Under: more than 2.5 total goals?',
+    build: (ev, ctx) => ({
+      text: `${ctx.homeTeamName} vs ${ctx.awayTeamName}: over or under 2.5 total goals?`,
       options: ['Over 2.5', 'Under 2.5'],
       timeLimit: 20,
       resolutionType: 'endOfMatch',
@@ -105,8 +105,8 @@ export const TEMPLATES = [
     once: true,
     delayMs: 3000,
     trigger: (ev, state) => ev.eventType === 'KickOff' && !state.kickoffFired,
-    build: () => ({
-      text: 'Total corners: more than 8.5 in the match?',
+    build: (ev, ctx) => ({
+      text: `${ctx.homeTeamName} vs ${ctx.awayTeamName}: more than 8.5 total corners?`,
       options: ['Over 8.5', 'Under 8.5'],
       timeLimit: 20,
       resolutionType: 'endOfMatch',
@@ -141,8 +141,8 @@ export const TEMPLATES = [
     once: true,
     delayMs: 3000,
     trigger: (ev, state) => ev.eventType === 'KickOff' && !state.kickoffFired,
-    build: () => ({
-      text: 'Will total match passes exceed 800?',
+    build: (ev, ctx) => ({
+      text: `${ctx.homeTeamName} vs ${ctx.awayTeamName}: will total passes exceed 800?`,
       options: ['Over 800', 'Under 800'],
       timeLimit: 20,
       resolutionType: 'endOfMatch',
@@ -157,8 +157,8 @@ export const TEMPLATES = [
     once: true,
     delayMs: 3000,
     trigger: (ev, state) => ev.eventType === 'KickOff' && !state.kickoffFired,
-    build: () => ({
-      text: 'Will a goal be scored in the first 15 minutes?',
+    build: (ev, ctx) => ({
+      text: `Fast start? A goal in the first 15 minutes of ${ctx.homeTeamName} vs ${ctx.awayTeamName}?`,
       options: ['Yes', 'No'],
       timeLimit: 20,
       resolutionType: 'endOfMatch',

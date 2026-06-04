@@ -101,12 +101,11 @@ async function persistPick(data = {}) {
     const isKickoff = q.category === 'kickoff';
     const elapsedMs = now - createdMs;
 
-    // Catch-up rule: realtime questions accept late answers only within the grace
-    // window (scored at the flat minimum later). Kick-off questions stay open all match.
+    // A pick is "late" (catch-up) once it lands after the live answer window.
+    // We accept late answers for ANY still-open question (status !== 'resolved'),
+    // so the "missed questions" list stays answerable until the server resolves
+    // it. Late answers are flagged here and scored at the flat minimum later.
     const late = elapsedMs > timeLimitMs;
-    if (!isKickoff && late && elapsedMs > timeLimitMs + CATCHUP_GRACE_SECONDS * 1000) {
-      return; // too late even for catch-up
-    }
 
     const picks = q.userPicks || {};
     const existing = picks[userId];
