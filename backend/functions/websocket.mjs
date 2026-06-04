@@ -35,6 +35,7 @@ async function orchestrateMatchStart(roomCode, data = {}) {
     return;
   }
   const matchId = data.matchId;
+  const demoMode = data.demoMode === true;
   if (!roomCode || !matchId) {
     console.warn('orchestrateMatchStart missing roomCode/matchId — skipping');
     return;
@@ -60,6 +61,7 @@ async function orchestrateMatchStart(roomCode, data = {}) {
   }
 
   // 2. Kick off the streamer asynchronously (it runs for the whole match).
+  //    In demo mode: tighter event cadence so 5 questions arrive quickly.
   try {
     await lambdaClient.send(new InvokeCommand({
       FunctionName: DFL_EVENTS_FUNCTION,
@@ -70,11 +72,12 @@ async function orchestrateMatchStart(roomCode, data = {}) {
         matchInfoKey: DFL_MATCH_INFO_KEY,
         matchId,
         roomCode,
-        delayMs: STREAM_DELAY_MS,
+        demoMode,
+        delayMs: demoMode ? 1000 : STREAM_DELAY_MS,
         startDelayMs: 5000, // 5s lead-in before the first (kick-off) event
       })),
     }));
-    console.log(`Auto-stream invoked for room ${roomCode}, match ${matchId}`);
+    console.log(`Auto-stream invoked for room ${roomCode}, match ${matchId} (demo=${demoMode})`);
   } catch (err) {
     console.error('orchestrateMatchStart invoke failed:', err.message);
     startedRooms.delete(key); // allow a retry

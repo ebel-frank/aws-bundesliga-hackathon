@@ -56,6 +56,47 @@ function eventsAfter(events, eventId) {
   return idx === -1 ? [] : events.slice(idx + 1);
 }
 
+// ─── Template metadata (dimension + per-match repeat caps) ──────
+//
+// `dimension` groups templates by the aspect of play they probe, so the
+// selector can enforce variety (don't ask two "goals" questions in a row).
+// `maxPerMatch` caps how many times a template may fire in a single match.
+// One-off conceptual markets (result, over/under) cap at 1; recurring "moment"
+// templates cap at 2 (and only repeat for a different player/team — enforced in
+// the selector). Rare events (penalty) get a slightly higher cap.
+export const TEMPLATE_META = {
+  // Kick-off conceptual markets — one each per match.
+  ko_final_result:      { dimension: 'result',     maxPerMatch: 1 },
+  ko_over_under_25:     { dimension: 'goals',       maxPerMatch: 1 },
+  ko_corners_85:        { dimension: 'corners',     maxPerMatch: 1 },
+  ko_first_scorer_team: { dimension: 'goals',       maxPerMatch: 1 },
+  ko_total_passes_800:  { dimension: 'possession',  maxPerMatch: 1 },
+  ko_goal_first_15:     { dimension: 'goals',       maxPerMatch: 1 },
+  ko_possession_55:     { dimension: 'possession',  maxPerMatch: 1 },
+  // Recurring real-time "moment" templates.
+  rt_goal_box_trivia:    { dimension: 'goals',      maxPerMatch: 2 },
+  rt_next_shot_goal:     { dimension: 'shots',      maxPerMatch: 2 },
+  rt_corner_to_shot:     { dimension: 'corners',    maxPerMatch: 2 },
+  rt_card_second_booking:{ dimension: 'discipline', maxPerMatch: 2 },
+  rt_sub_impact:         { dimension: 'player',     maxPerMatch: 2 },
+  rt_freekick_on_target: { dimension: 'shots',      maxPerMatch: 2 },
+  rt_penalty_save:       { dimension: 'goals',      maxPerMatch: 3 },
+  rt_offside_repeat:     { dimension: 'discipline', maxPerMatch: 2 },
+  // New real-time templates.
+  rt_next_goal_team:     { dimension: 'goals',      maxPerMatch: 1 },
+  rt_card_burst:         { dimension: 'discipline', maxPerMatch: 2 },
+  rt_shot_wide_response: { dimension: 'shots',      maxPerMatch: 2 },
+  rt_sub_team_next_goal: { dimension: 'player',     maxPerMatch: 1 },
+};
+
+export function templateDimension(id) {
+  return TEMPLATE_META[id]?.dimension || 'general';
+}
+
+export function templateCap(id) {
+  return TEMPLATE_META[id]?.maxPerMatch ?? 2;
+}
+
 // ─── Templates ──────────────────────────────────────────────────
 
 export const TEMPLATES = [
@@ -385,6 +426,99 @@ export const TEMPLATES = [
         (e) => e.eventType === 'Offside' && e.teamId === q.resolverParams.teamId
       );
       return again ? 'Yes' : 'No';
+    },
+  },
+  {
+    // I. After a goal → which team scores the NEXT goal (or none)?
+    id: 'rt_next_goal_team',
+    section: 'realtime',
+    scoring: 'ranked',
+    delayMs: 5000,
+    trigger: (ev) => ev.eventType === 'Goal',
+    build: (ev, ctx) => ({
+      text: 'Who grabs the NEXT goal?',
+      options: [ctx.homeTeamName, ctx.awayTeamName, 'No more goals'],
+      timeLimit: 12,
+      resolutionType: 'endOfMatch',
+      resolverParams: { afterEventId: ev.eventId },
+    }),
+    resolve: (q, events, ctx) => {
+      const after = eventsAfter(events, q.resolverParams.afterEventId);
+      const next = after.find((e) => e.eventType === 'Goal');
+      if (!next) return 'No more goals';
+      return next.teamId === ctx.homeTeamId ? ctx.homeTeamName : ctx.awayTeamName;
+    },
+  },
+  {
+    // J. After a card → another booking (either team) in the next 10 minutes?
+    id: 'rt_card_burst',
+    section: 'realtime',
+    scoring: 'ranked',
+    delayMs: 6000,
+    trigger: (ev) => ev.eventType === 'Card',
+    build: (ev) => ({
+      text: 'Tempers flaring — another card shown in the next 10 minutes?',
+      options: ['Yes', 'No'],
+      timeLimit: 12,
+      resolutionType: 'deferred',
+      windowSeconds: 600,
+      resolverParams: { afterEventId: ev.eventId, afterTime: ev.eventTime },
+    }),
+    resolve: (q, events) => {
+      const after = eventsAfter(events, q.resolverParams.afterEventId);
+      const start = new Date(q.resolverParams.afterTime).getTime();
+      const within = after.filter((e) => new Date(e.eventTime).getTime() - start <= 600000);
+      const hit = within.some((e) => e.eventType === 'Card');
+      const windowClosed = after.some((e) => new Date(e.eventTime).getTime() - start > 600000);
+      if (hit) return 'Yes';
+      if (windowClosed) return 'No';
+      return null;
+    },
+  },
+  {
+    // K. Shot wide/off target → will the SAME team have a shot on target next?
+    id: 'rt_shot_wide_response',
+    section: 'realtime',
+    scoring: 'ranked',
+    delayMs: 0,
+    trigger: (ev) =>
+      ev.subType === 'Shot' && ev.eventType !== 'Goal' && ev.evaluation === 'wide',
+    build: (ev) => ({
+      text: `${ev.teamName || 'That side'} just missed. Will their NEXT shot be on target?`,
+      options: ['Yes', 'No'],
+      timeLimit: 10,
+      resolutionType: 'deferred',
+      windowSeconds: 600,
+      resolverParams: { afterEventId: ev.eventId, teamId: ev.teamId },
+    }),
+    resolve: (q, events) => {
+      const after = eventsAfter(events, q.resolverParams.afterEventId);
+      const nextShot = after.find(
+        (e) => (e.subType === 'Shot' || e.eventType === 'Goal') && e.teamId === q.resolverParams.teamId
+      );
+      if (!nextShot) return null;
+      const onTarget = nextShot.eventType === 'Goal' || nextShot.evaluation === 'savedByGoalkeeper';
+      return onTarget ? 'Yes' : 'No';
+    },
+  },
+  {
+    // L. Substitution → will the SUB's team score before full time?
+    id: 'rt_sub_team_next_goal',
+    section: 'realtime',
+    scoring: 'ranked',
+    delayMs: 5000,
+    trigger: (ev) => ev.eventType === 'Substitution' && ev.teamId,
+    build: (ev) => ({
+      text: `Fresh legs for ${ev.teamName || 'them'} — will their team score before full time?`,
+      options: ['Yes', 'No'],
+      timeLimit: 12,
+      resolutionType: 'endOfMatch',
+      resolverParams: { teamId: ev.teamId, afterEventId: ev.eventId },
+    }),
+    resolve: (q, events) => {
+      const after = eventsAfter(events, q.resolverParams.afterEventId);
+      const scored = after.some((e) => e.eventType === 'Goal' && e.teamId === q.resolverParams.teamId);
+      return scored ? 'Yes' : 'No';
     },
   },
 ];

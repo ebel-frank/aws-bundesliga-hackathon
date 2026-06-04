@@ -50,6 +50,7 @@ class ApiService {
     required bool isPrivate,
     required String hostUserId,
     String? hostDisplayName,
+    bool demoMode = false,
   }) async {
     try {
       final response = await _dio.post('/rooms', data: {
@@ -59,6 +60,7 @@ class ApiService {
         'isPrivate': isPrivate,
         'hostUserId': hostUserId,
         'hostDisplayName': hostDisplayName ?? 'Host',
+        'demoMode': demoMode,
       });
       return SquadModel.fromJson(response.data['room']);
     } on DioException catch (e) {

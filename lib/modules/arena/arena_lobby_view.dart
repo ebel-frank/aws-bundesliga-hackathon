@@ -683,6 +683,27 @@ class _RoomListPage extends StatelessWidget {
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                // Demo mode toggle
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.background.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.cardBorder),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.bolt_outlined, size: 20, color: AppColors.textMuted),
+                      const SizedBox(width: 12),
+                      const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text('Demo Mode', style: TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+                        Text('5 questions, faster pace', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+                      ])),
+                      Obx(() => Switch(value: controller.isDemoToggle.value, onChanged: (v) => controller.isDemoToggle.value = v, activeColor: AppColors.arenaAccent)),
+                    ],
+                  ),
+                ),
                 const SizedBox(height: 20),
                 // Error
                 Obx(() => controller.errorMessage.value.isNotEmpty
@@ -705,7 +726,12 @@ class _RoomListPage extends StatelessWidget {
                       return;
                     }
                     Navigator.of(sheetContext).pop();
-                    controller.createRoom(roomName: name, maxPlayers: maxPlayersNotifier.value, isPrivate: controller.isPrivateToggle.value);
+                    controller.createRoom(
+                      roomName: name,
+                      maxPlayers: maxPlayersNotifier.value,
+                      isPrivate: controller.isPrivateToggle.value,
+                      demoMode: controller.isDemoToggle.value,
+                    );
                   },
                   child: Container(
                     height: 52,

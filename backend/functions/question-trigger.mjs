@@ -3,7 +3,7 @@ import { DynamoDBDocumentClient, ScanCommand, DeleteCommand, PutCommand, GetComm
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { findTriggeredTemplates, getTemplate, resolveTemplate, TEMPLATES } from './question-templates.mjs';
+import { findTriggeredTemplates, getTemplate, resolveTemplate, TEMPLATES, templateDimension, templateCap } from './question-templates.mjs';
 import { parseXmlEvents } from './dfl-events.mjs';
 
 const ddbClient = new DynamoDBClient({});
@@ -37,6 +37,9 @@ const MODEL_ID = 'amazon.nova-lite-v1:0';
  */
 // Maximum questions per match to control costs (3 kick-off + up to 22 in-play)
 const MAX_QUESTIONS_PER_MATCH = 25;
+// Demo mode: a short, fast game for presentations.
+const DEMO_MAX_QUESTIONS = 5;
+const DEMO_QUESTION_SPACING_MS = 8000;
 // How many kick-off questions to randomly select from the kick-off pool
 const KICKOFF_QUESTION_COUNT = 3;
 // Minimum seconds between questions to avoid flooding (serializes the one-at-a-time UI)
@@ -105,11 +108,15 @@ export const handler = async (event) => {
       return resetMatch(event);
     }
 
-    const { matchId, roomCode, event: dflEvent, matchInfo, playerLookup, teamLookup } = event;
+    const { matchId, roomCode, event: dflEvent, matchInfo, playerLookup, teamLookup, demoMode = false } = event;
 
     if (!matchId || !dflEvent) {
       return { statusCode: 400, body: 'matchId and event required' };
     }
+
+    // Demo mode tightens the limits for short, fast presentations.
+    const maxQuestions = demoMode ? DEMO_MAX_QUESTIONS : MAX_QUESTIONS_PER_MATCH;
+    const questionSpacingMs = demoMode ? DEMO_QUESTION_SPACING_MS : MIN_QUESTION_SPACING_MS;
 
     // 1. Buffer the event (always, for context + resolution)
     await bufferEvent(matchId, dflEvent);
@@ -130,30 +137,55 @@ export const handler = async (event) => {
     const templates = findTriggeredTemplates(dflEvent, state);
 
     // On the first kick-off, queue all kick-off questions to be released
-    // one-per-spacing-window over the opening minutes.
+    // one-per-spacing-window over the opening minutes. Guard against replays
+    // re-entering this branch (kickoffFired short-circuits re-queueing).
     let kickoffQueue = state.kickoffQueue || [];
     if (dflEvent.eventType === 'KickOff' && !state.kickoffFired) {
       kickoffQueue = kickoffTemplateIds();
+      // In demo mode, keep only 2 kick-off questions so in-play moments still fit the 5-question budget.
+      if (demoMode) kickoffQueue = kickoffQueue.slice(0, 2);
     }
+    // Drop any kick-off templates that have already hit their cap (defensive
+    // against replays where the queue persisted but questions were created).
+    kickoffQueue = kickoffQueue.filter(
+      (id) => (state.usedTemplateCounts[id] || 0) < templateCap(id)
+    );
 
     // Decide whether this moment should be an AI "color" question instead.
     const aiEligible = AI_QUESTION_TRIGGERS.has(dflEvent.eventType);
 
-    const realtimeTemplates = templates.filter((t) => t.section !== 'kickoff');
+    // Filter realtime templates: respect per-template caps, avoid back-to-back
+    // repeats (recent window), and only allow a capped repeat for a DIFFERENT
+    // subject (player/team) than the prior instance.
+    const subject = dflEvent.playerId || dflEvent.teamId || null;
+    const recentWindow = state.recentTemplateIds.slice(-4);
+    const eligibleRealtime = templates
+      .filter((t) => t.section !== 'kickoff')
+      .filter((t) => {
+        const used = state.usedTemplateCounts[t.id] || 0;
+        if (used >= templateCap(t.id)) return false; // hit cap
+        if (recentWindow.includes(t.id)) return false; // too recent
+        // If used at least once, require a different subject than last time.
+        if (used > 0) {
+          const lastSubject = state.templateLastSubject[t.id];
+          if (lastSubject != null && subject != null && lastSubject === subject) return false;
+        }
+        return true;
+      });
 
-    if (kickoffQueue.length === 0 && realtimeTemplates.length === 0 && !aiEligible) {
-      return { statusCode: 200, body: JSON.stringify({ triggered: false, reason: 'no template / not AI-eligible' }) };
+    if (kickoffQueue.length === 0 && eligibleRealtime.length === 0 && !aiEligible) {
+      return { statusCode: 200, body: JSON.stringify({ triggered: false, reason: 'no eligible template / not AI-eligible' }) };
     }
 
     // 4. Max-questions cap
     const existingQuestions = await getQuestionCount(matchId).catch(() => 0);
-    if (existingQuestions >= MAX_QUESTIONS_PER_MATCH) {
+    if (existingQuestions >= maxQuestions) {
       return { statusCode: 200, body: JSON.stringify({ triggered: false, reason: 'max questions reached' }) };
     }
 
     // 5. Spacing gate — one question at a time
     const lastQuestionTime = await getLastQuestionTime(matchId).catch(() => null);
-    if (lastQuestionTime && (Date.now() - lastQuestionTime) < MIN_QUESTION_SPACING_MS) {
+    if (lastQuestionTime && (Date.now() - lastQuestionTime) < questionSpacingMs) {
       // Persist the (possibly newly-initialised) kickoff queue + kickoffFired so it isn't lost.
       if (dflEvent.eventType === 'KickOff' && !state.kickoffFired) {
         await updateMatchFlags(matchId, { kickoffFired: true, kickoffQueue });
@@ -166,20 +198,24 @@ export const handler = async (event) => {
     let stored;
     let nextKickoffQueue = kickoffQueue;
     let source = 'template';
+    let chosenTemplateId = null;
 
     if (kickoffQueue.length > 0) {
       const template = getTemplate(kickoffQueue[0]);
       nextKickoffQueue = kickoffQueue.slice(1);
       source = 'kickoff';
+      chosenTemplateId = template?.id || null;
       stored = await buildAndStoreTemplateQuestion({ matchId, template, dflEvent, ctx });
     } else {
-      const useAI = aiEligible && (realtimeTemplates.length === 0 || state.aiTurn === true);
+      const useAI = aiEligible && (eligibleRealtime.length === 0 || state.aiTurn === true);
       if (useAI) {
         source = 'ai';
-        stored = await buildAndStoreAiQuestion({ matchId, dflEvent, ctx });
+        stored = await buildAndStoreAiQuestion({ matchId, dflEvent, ctx, state });
       } else {
-        const template = pickTemplate(realtimeTemplates);
+        // Prefer the template whose dimension was used least recently (spread).
+        const template = pickTemplateBySpread(eligibleRealtime, state);
         source = 'template';
+        chosenTemplateId = template?.id || null;
         stored = await buildAndStoreTemplateQuestion({ matchId, template, dflEvent, ctx });
       }
     }
@@ -188,11 +224,30 @@ export const handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ triggered: false, reason: 'build failed' }) };
     }
 
-    // 7. Persist rotation + kickoff state.
+    // 7. Persist rotation + kickoff state + usage tracking.
+    const usedTemplateId = chosenTemplateId || stored.templateId || null;
+    const newCounts = { ...state.usedTemplateCounts };
+    const newRecent = [...state.recentTemplateIds];
+    const newDims = [...state.recentDimensions];
+    const newSubjects = { ...state.templateLastSubject };
+    if (usedTemplateId) {
+      newCounts[usedTemplateId] = (newCounts[usedTemplateId] || 0) + 1;
+      newRecent.push(usedTemplateId);
+      newDims.push(templateDimension(usedTemplateId));
+      if (subject != null) newSubjects[usedTemplateId] = subject;
+    } else if (source === 'ai') {
+      newRecent.push('__ai__');
+      newDims.push(stored.question?.category || 'ai');
+    }
+
     await updateMatchFlags(matchId, {
       aiTurn: !state.aiTurn,
       kickoffFired: state.kickoffFired || dflEvent.eventType === 'KickOff',
       kickoffQueue: nextKickoffQueue,
+      usedTemplateCounts: newCounts,
+      recentTemplateIds: newRecent.slice(-10),
+      recentDimensions: newDims.slice(-10),
+      templateLastSubject: newSubjects,
     });
 
     // 8. Broadcast
@@ -220,8 +275,49 @@ function pickTemplate(templates) {
   return [...templates].sort((a, b) => rank(a) - rank(b))[0];
 }
 
+/**
+ * Choose the eligible template whose DIMENSION has been used least recently,
+ * so consecutive questions cover different aspects of play (goals, cards,
+ * shots, corners, possession, discipline, player). Ties break on least-recent
+ * dimension position, then deterministic-section rank.
+ */
+function pickTemplateBySpread(templates, state) {
+  if (!templates || templates.length === 0) return null;
+  if (templates.length === 1) return templates[0];
+
+  const recentDims = state.recentDimensions || [];
+  // Score each candidate by how recently its dimension was used (lower = better).
+  const dimRecency = (dim) => {
+    const idx = recentDims.lastIndexOf(dim);
+    return idx === -1 ? -1 : idx; // -1 = never used recently (best)
+  };
+
+  return [...templates].sort((a, b) => {
+    const ra = dimRecency(templateDimension(a.id));
+    const rb = dimRecency(templateDimension(b.id));
+    // Never-used dimensions (-1) come first; otherwise older (smaller idx) first.
+    if (ra !== rb) return ra - rb;
+    // Tie-break: fewer total uses first.
+    const ua = state.usedTemplateCounts?.[a.id] || 0;
+    const ub = state.usedTemplateCounts?.[b.id] || 0;
+    return ua - ub;
+  })[0];
+}
+
 /** Build a deterministic template question, optionally enrich phrasing with Bedrock, and store it. */
 async function buildAndStoreTemplateQuestion({ matchId, template, dflEvent, ctx }) {
+  if (!template) return null;
+
+  // Idempotency: never create two questions for the same (template, trigger event).
+  // Protects against replays / duplicate invocations re-firing the same moment.
+  if (dflEvent.eventId) {
+    const dup = await questionExistsFor(matchId, template.id, dflEvent.eventId);
+    if (dup) {
+      console.log(`Skipping duplicate ${template.id} for event ${dflEvent.eventId}`);
+      return null;
+    }
+  }
+
   const built = template.build(dflEvent, ctx);
   if (!built || !built.text || !built.options) return null;
 
@@ -251,6 +347,7 @@ async function buildAndStoreTemplateQuestion({ matchId, template, dflEvent, ctx 
     status: built.resolutionType === 'immediate' ? 'answerKnown' : 'pending',
     triggerType: dflEvent.eventType,
     triggerEvent: dflEvent.summary || '',
+    triggerEventId: dflEvent.eventId || null,
     aiGenerated: false,
     userPicks: {},
     createdAt: new Date().toISOString(),
@@ -263,7 +360,7 @@ async function buildAndStoreTemplateQuestion({ matchId, template, dflEvent, ctx 
 }
 
 /** Build a standalone AI-generated "color" question (bonus scoring, AI-resolved at match end). */
-async function buildAndStoreAiQuestion({ matchId, dflEvent, ctx }) {
+async function buildAndStoreAiQuestion({ matchId, dflEvent, ctx, state = {} }) {
   const trigger = { type: dflEvent.eventType, delayMs: 0 };
   const context = await getMatchContext(matchId);
   // Compute the LIVE score from events so far — never leak the final result,
@@ -280,9 +377,33 @@ async function buildAndStoreAiQuestion({ matchId, dflEvent, ctx }) {
     liveScore: live.scoreline,
     liveMinute: live.minute,
   };
-  const question = await callBedrock(trigger, dflEvent, context, namedMatchInfo, ctx.playerLookup, ctx.teamLookup, live);
+
+  // Gather already-asked questions for this match so the AI avoids repeats and
+  // we can reject near-duplicates after generation.
+  const asked = await getAskedQuestions(matchId);
+  const askedTexts = asked.map((q) => q.question).filter(Boolean);
+  const usedDimensions = new Set([...(state.recentDimensions || []), ...asked.map((q) => q.category)].filter(Boolean));
+  // Force the AI onto a dimension we haven't covered much.
+  const allDimensions = ['goal', 'cards', 'shots', 'subs', 'momentum', 'player'];
+  const preferredDimension = allDimensions.find((d) => !usedDimensions.has(d)) || allDimensions[Math.floor(Math.random() * allDimensions.length)];
+
+  // Try up to 3 times to get a question that isn't a near-duplicate.
+  let question = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const candidate = await callBedrock(
+      trigger, dflEvent, context, namedMatchInfo, ctx.playerLookup, ctx.teamLookup, live,
+      { askedTexts, preferredDimension }
+    );
+    if (!candidate || !candidate.question || !candidate.options) continue;
+    if (!isTooSimilar(candidate.question, askedTexts)) {
+      question = candidate;
+      break;
+    }
+    console.log(`AI question too similar (attempt ${attempt + 1}), regenerating: "${candidate.question}"`);
+  }
+
   if (!question || !question.question || !question.options) {
-    console.error('Bedrock returned invalid AI question');
+    console.error('Bedrock returned invalid/duplicate AI question after retries');
     return null;
   }
 
@@ -303,6 +424,7 @@ async function buildAndStoreAiQuestion({ matchId, dflEvent, ctx }) {
     status: 'pending',
     triggerType: dflEvent.eventType,
     triggerEvent: dflEvent.summary || '',
+    triggerEventId: dflEvent.eventId || null,
     aiGenerated: true,
     userPicks: {},
     createdAt: new Date().toISOString(),
@@ -690,9 +812,13 @@ async function getMatchState(matchId) {
       kickoffFired: item.kickoffFired === true,
       aiTurn: item.aiTurn === true,
       kickoffQueue: Array.isArray(item.kickoffQueue) ? item.kickoffQueue : [],
+      usedTemplateCounts: (item.usedTemplateCounts && typeof item.usedTemplateCounts === 'object') ? item.usedTemplateCounts : {},
+      recentTemplateIds: Array.isArray(item.recentTemplateIds) ? item.recentTemplateIds : [],
+      recentDimensions: Array.isArray(item.recentDimensions) ? item.recentDimensions : [],
+      templateLastSubject: (item.templateLastSubject && typeof item.templateLastSubject === 'object') ? item.templateLastSubject : {},
     };
   } catch {
-    return { kickoffFired: false, aiTurn: false, kickoffQueue: [] };
+    return { kickoffFired: false, aiTurn: false, kickoffQueue: [], usedTemplateCounts: {}, recentTemplateIds: [], recentDimensions: [], templateLastSubject: {} };
   }
 }
 
@@ -756,6 +882,65 @@ async function getLastQuestionTime(matchId) {
   }
 }
 
+/** True if a question already exists for this (matchId, templateId, triggerEventId). */
+async function questionExistsFor(matchId, templateId, triggerEventId) {
+  try {
+    const result = await ddb.send(new QueryCommand({
+      TableName: QUESTIONS_TABLE,
+      KeyConditionExpression: 'matchId = :m',
+      FilterExpression: 'templateId = :t AND triggerEventId = :e',
+      ExpressionAttributeValues: { ':m': matchId, ':t': templateId, ':e': triggerEventId },
+      Select: 'COUNT',
+    }));
+    return (result.Count || 0) > 0;
+  } catch (err) {
+    console.error('questionExistsFor error:', err.message);
+    return false; // fail open — better a rare dup than blocking all questions
+  }
+}
+
+/** Return all questions asked so far for a match (lightweight projection). */
+async function getAskedQuestions(matchId) {
+  try {
+    const result = await ddb.send(new QueryCommand({
+      TableName: QUESTIONS_TABLE,
+      KeyConditionExpression: 'matchId = :m',
+      ProjectionExpression: '#q, category, options',
+      ExpressionAttributeNames: { '#q': 'question' },
+      ExpressionAttributeValues: { ':m': matchId },
+    }));
+    return result.Items || [];
+  } catch (err) {
+    console.error('getAskedQuestions error:', err.message);
+    return [];
+  }
+}
+
+/** Normalise a question into a token set for similarity comparison. */
+function tokenSet(text) {
+  return new Set(
+    String(text || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length > 2)
+  );
+}
+
+/** Jaccard similarity over token sets. */
+function jaccard(a, b) {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const t of a) if (b.has(t)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+/** True if `candidate` is too similar (≥ 0.6 Jaccard) to any already-asked question. */
+function isTooSimilar(candidate, askedTexts = []) {
+  const cset = tokenSet(candidate);
+  return askedTexts.some((t) => jaccard(cset, tokenSet(t)) >= 0.6);
+}
+
 // ─── Bedrock Integration ────────────────────────────────────────
 
 /**
@@ -796,10 +981,13 @@ STRICT RULES:
   return out.replace(/^["']|["']$/g, '');
 }
 
-async function callBedrock(trigger, dflEvent, recentEvents, matchInfo, playerLookup, teamLookup, live = {}) {
+async function callBedrock(trigger, dflEvent, recentEvents, matchInfo, playerLookup, teamLookup, live = {}, diversity = {}) {
   const match = matchInfo || {};
   const playerName = dflEvent.playerName || resolvePlayer(dflEvent.playerId, playerLookup);
   const teamName = dflEvent.teamName || resolveTeam(dflEvent.teamId, teamLookup);
+
+  const askedTexts = diversity.askedTexts || [];
+  const preferredDimension = diversity.preferredDimension || null;
 
   const systemPrompt = `You are a live football prediction quiz generator for the Bundesliga.
 You write ONE short, exciting, PREDICTIVE multiple-choice question about what will happen NEXT, anchored to the specific moment just described.
@@ -812,6 +1000,8 @@ HARD RULES:
 - Never reveal or assume the final result. Use ONLY the live score given.
 - Keep the question under 120 characters.
 - Return ONLY valid JSON, no markdown, no commentary.
+${preferredDimension ? `- Focus this question on the "${preferredDimension}" dimension of play (it has been underused).` : ''}
+${askedTexts.length ? `- Do NOT ask anything equivalent to these already-asked questions; pick a genuinely different angle:\n${askedTexts.map((t) => `  • ${t}`).join('\n')}` : ''}
 
 Required JSON format:
 {

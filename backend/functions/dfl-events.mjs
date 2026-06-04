@@ -37,7 +37,7 @@ const QUESTION_TRIGGER_FUNCTION = process.env.QUESTION_TRIGGER_FUNCTION;
  */
 export const processEvents = async (event) => {
   try {
-    const { bucket, eventsKey, matchInfoKey, matchId, roomCode, delayMs = 3000, maxEvents = 0 } = event;
+    const { bucket, eventsKey, matchInfoKey, matchId, roomCode, delayMs = 3000, maxEvents = 0, demoMode = false } = event;
 
     // Default to the stack's own DFL data bucket if not explicitly provided.
     const effectiveBucket = bucket || process.env.DFL_DATA_BUCKET;
@@ -140,6 +140,7 @@ export const processEvents = async (event) => {
             matchInfo,
             playerLookup,
             teamLookup,
+            demoMode,
           })),
         }));
       }

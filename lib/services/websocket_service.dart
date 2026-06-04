@@ -165,9 +165,10 @@ class WebSocketService {
 
   /// Broadcast that the game has started. Carries the matchId so the backend
   /// can auto-stream the real match data for that fixture.
-  void sendGameStarted(String roomCode, {String? matchId}) {
+  void sendGameStarted(String roomCode, {String? matchId, bool demoMode = false}) {
     send(action: 'game_started', roomCode: roomCode, data: {
       if (matchId != null) 'matchId': matchId,
+      'demoMode': demoMode,
     });
   }
 

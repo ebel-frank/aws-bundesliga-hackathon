@@ -55,6 +55,7 @@ class ArenaController extends GetxController {
   final RxList<SquadModel> availableRooms = <SquadModel>[].obs;
   final RxBool isLoadingRooms = false.obs;
   final RxBool isPrivateToggle = false.obs;
+  final RxBool isDemoToggle = false.obs; // demo mode: 5-question limit, tighter spacing
   final RxString roomSearchQuery = ''.obs;
 
   /// Filtered rooms based on search query.
@@ -241,6 +242,17 @@ class ArenaController extends GetxController {
 
     if (question.isEmpty || options.isEmpty) return;
 
+    // Guard against duplicate broadcasts of the same question (network echo,
+    // reconnect replays, or the backend firing twice) — by id or by text.
+    if (questionId.isNotEmpty &&
+        rounds.any((r) => r.roundId == questionId)) {
+      return;
+    }
+    final normalizedQ = question.trim().toLowerCase();
+    if (rounds.any((r) => r.questionText.trim().toLowerCase() == normalizedQ)) {
+      return;
+    }
+
     // Create a new prediction round from the AI-generated question
     final newRound = PredictionRoundModel(
       roundId: questionId.isNotEmpty ? questionId : 'ai_${DateTime.now().millisecondsSinceEpoch}',
@@ -269,6 +281,12 @@ class ArenaController extends GetxController {
     _alertQuestionArrived();
 
     _startCountdown();
+  }
+
+  /// Loose answer equality matching the backend (casing/whitespace/punctuation tolerant).
+  bool _answersEqual(String a, String b) {
+    String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return norm(a) == norm(b);
   }
 
   /// Handle question resolutions from the backend. Fires live (per-question)
@@ -301,8 +319,14 @@ class ArenaController extends GetxController {
       final scores = result['scores'] as Map<String, dynamic>?;
       final myPoints = (scores?[_currentUserId] as num?)?.toInt() ?? 0;
       final myPickForQ = _userPicks[questionId];
-      // Server is authoritative: any points means the pick was correct.
-      final correct = myPoints > 0;
+      final correctAnswer = result['correctAnswer'] as String? ?? '';
+
+      // Correctness is determined by comparing the user's pick to the
+      // authoritative correctAnswer (loose match), NOT by points — points can
+      // be 0 for a correct-but-late answer or lag behind pick persistence.
+      final bool correct = myPickForQ != null &&
+          correctAnswer.isNotEmpty &&
+          _answersEqual(myPickForQ, correctAnswer);
 
       // Record resolution status for QA history (live update) — only if answered
       if (myPickForQ != null) {
@@ -310,25 +334,17 @@ class ArenaController extends GetxController {
       }
 
       // Update the round's correctAnswer for QA history display
-      final correctAnswer = result['correctAnswer'] as String? ?? '';
       final roundIdx = rounds.indexWhere((r) => r.roundId == questionId);
-      if (roundIdx != -1) {
-        String resolvedAnswer = correctAnswer;
-        // If server didn't send correctAnswer but user scored points, their pick was correct
-        if (resolvedAnswer.isEmpty && myPoints > 0 && myPickForQ != null) {
-          resolvedAnswer = myPickForQ;
-        }
-        if (resolvedAnswer.isNotEmpty) {
-          rounds[roundIdx] = PredictionRoundModel(
-            roundId: rounds[roundIdx].roundId,
-            roundNumber: rounds[roundIdx].roundNumber,
-            questionText: rounds[roundIdx].questionText,
-            options: rounds[roundIdx].options,
-            correctAnswer: resolvedAnswer,
-            category: rounds[roundIdx].category,
-            timeLimitSeconds: rounds[roundIdx].timeLimitSeconds,
-          );
-        }
+      if (roundIdx != -1 && correctAnswer.isNotEmpty) {
+        rounds[roundIdx] = PredictionRoundModel(
+          roundId: rounds[roundIdx].roundId,
+          roundNumber: rounds[roundIdx].roundNumber,
+          questionText: rounds[roundIdx].questionText,
+          options: rounds[roundIdx].options,
+          correctAnswer: correctAnswer,
+          category: rounds[roundIdx].category,
+          timeLimitSeconds: rounds[roundIdx].timeLimitSeconds,
+        );
       }
 
       // If this resolves the question currently on screen, clear it.
@@ -338,7 +354,7 @@ class ArenaController extends GetxController {
         activeRound.value = null;
       }
 
-      // Show the overlay only once, for the most recent question the user answered.
+      // Show a result toast only once, for the most recent answered question.
       if (!overlayShown && myPickForQ != null) {
         overlayShown = true;
         wasCorrect.value = correct;
@@ -348,18 +364,26 @@ class ArenaController extends GetxController {
         isDeferred.value = false;
         newStreak.value = correct ? newStreak.value + 1 : 0;
 
-        // Don't cover a live question the player is mid-answering with the overlay.
-        final hasLiveQuestion = activeRound.value != null;
-        if (currentScreen.value != ArenaScreen.end && !hasLiveQuestion) {
-          currentScreen.value = ArenaScreen.roundResult;
-          Future.delayed(const Duration(seconds: 3), () {
-            if (currentScreen.value == ArenaScreen.roundResult) {
-              currentScreen.value = ArenaScreen.prediction;
-            }
-          });
-        }
+        _showResultToast(correct, myPoints);
       }
     }
+  }
+
+  /// Show a brief correct/wrong toast (replaces the round-result overlay).
+  void _showResultToast(bool correct, int points) {
+    if (Get.isSnackbarOpen) {
+      Get.closeAllSnackbars();
+    }
+    Get.snackbar(
+      correct ? '✓ Correct!' : '✗ Wrong',
+      correct ? '+$points XP' : 'Better luck on the next one',
+      snackPosition: SnackPosition.TOP,
+      duration: const Duration(seconds: 2),
+      backgroundColor: const Color(0xDD1A2138),
+      colorText: correct ? const Color(0xFF00FF88) : const Color(0xFFFF3B5C),
+      margin: const EdgeInsets.all(12),
+      borderRadius: 10,
+    );
   }
 
   /// Replace the leaderboard XP totals with the server's authoritative values.
@@ -551,6 +575,7 @@ class ArenaController extends GetxController {
     required String roomName,
     required int maxPlayers,
     required bool isPrivate,
+    bool demoMode = false,
   }) async {
     isCreatingRoom.value = true;
     errorMessage.value = '';
@@ -568,6 +593,7 @@ class ArenaController extends GetxController {
         isPrivate: isPrivate,
         hostUserId: _currentUserId,
         hostDisplayName: _currentDisplayName,
+        demoMode: demoMode,
       );
 
       squad.value = createdRoom;
@@ -641,7 +667,11 @@ class ArenaController extends GetxController {
     if (broadcast) {
       final roomCode = squad.value?.roomCode ?? '';
       if (roomCode.isNotEmpty) {
-        _roomWs.sendGameStarted(roomCode, matchId: selectedMatch.value?.matchId);
+        _roomWs.sendGameStarted(
+          roomCode,
+          matchId: selectedMatch.value?.matchId,
+          demoMode: squad.value?.demoMode ?? false,
+        );
       }
     }
 

@@ -129,7 +129,7 @@ export const getRooms = async (event) => {
 export const createRoom = async (event) => {
   try {
     const body = JSON.parse(event.body || '{}');
-    const { matchId, roomName, maxPlayers = 6, isPrivate = false, hostUserId, hostDisplayName } = body;
+    const { matchId, roomName, maxPlayers = 6, isPrivate = false, hostUserId, hostDisplayName, demoMode = false } = body;
 
     if (!matchId || !roomName || !hostUserId) {
       return { statusCode: 400, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'matchId, roomName, and hostUserId are required' }) };
@@ -142,6 +142,7 @@ export const createRoom = async (event) => {
       roomName,
       maxPlayers,
       isPrivate,
+      demoMode,
       hostUserId,
       members: [{
         userId: hostUserId,
