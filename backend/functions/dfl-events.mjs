@@ -1,6 +1,6 @@
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, ScanCommand, DeleteCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, ScanCommand, DeleteCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
@@ -10,8 +10,10 @@ const ddb = DynamoDBDocumentClient.from(ddbClient);
 const lambdaClient = new LambdaClient({});
 
 const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE;
+const QUESTIONS_TABLE = process.env.QUESTIONS_TABLE;
 const WS_ENDPOINT = process.env.WS_ENDPOINT;
 const QUESTION_TRIGGER_FUNCTION = process.env.QUESTION_TRIGGER_FUNCTION;
+const DEMO_QUESTION_TARGET = 5;
 
 /**
  * Processes DFL match data from S3 and broadcasts enriched events via WebSocket.
@@ -72,8 +74,13 @@ export const processEvents = async (event) => {
     const events = parseXmlEvents(xmlString, matchId, playerLookup, teamLookup);
     console.log(`Parsed ${events.length} events`);
 
+    // Skip low-value "BallAction" (OtherBallAction) events entirely — they add
+    // noise, never trigger questions, and bloat the stream length.
+    const meaningfulEvents = events.filter((e) => e.eventType !== 'BallAction');
+    console.log(`Filtered out ${events.length - meaningfulEvents.length} BallAction events`);
+
     // Limit events for testing
-    const streamEvents = maxEvents > 0 ? events.slice(0, maxEvents) : events;
+    const streamEvents = maxEvents > 0 ? meaningfulEvents.slice(0, maxEvents) : meaningfulEvents;
     console.log(`Streaming ${streamEvents.length} events (maxEvents=${maxEvents || 'all'})`);
 
     if (streamEvents.length === 0) {
@@ -158,6 +165,19 @@ export const processEvents = async (event) => {
       };
 
       await broadcastToConnections(allConnections, message);
+
+      // Demo mode: once the question target is reached, give the last question
+      // time to be answered + resolved, then end the match early instead of
+      // streaming the whole file (which would hang past the Lambda timeout).
+      if (demoMode && QUESTIONS_TABLE) {
+        const qCount = await getMatchQuestionCount(matchId);
+        if (qCount >= DEMO_QUESTION_TARGET) {
+          console.log(`Demo target (${DEMO_QUESTION_TARGET}) reached — ending match after grace period.`);
+          // Grace: allow the final question's answer window + resolution sweep.
+          await sleep(20000);
+          break;
+        }
+      }
 
       // If this is the FinalWhistle (second half), trigger question resolution
       if (dflEvent.eventType === 'FinalWhistle' && dflEvent.gameSection === 'secondHalf' && QUESTION_TRIGGER_FUNCTION) {
@@ -556,6 +576,23 @@ async function getAllConnections(targetRoomCode, matchId, roomCode) {
   const connections = await getConnections(targetRoomCode);
   const matchConnections = roomCode ? await getConnections(`match_${matchId}`) : [];
   return [...connections, ...matchConnections];
+}
+
+/** Count how many questions have been created for a match (demo early-exit). */
+async function getMatchQuestionCount(matchId) {
+  if (!QUESTIONS_TABLE) return 0;
+  try {
+    const result = await ddb.send(new QueryCommand({
+      TableName: QUESTIONS_TABLE,
+      KeyConditionExpression: 'matchId = :m',
+      ExpressionAttributeValues: { ':m': matchId },
+      Select: 'COUNT',
+    }));
+    return result.Count || 0;
+  } catch (err) {
+    console.error('getMatchQuestionCount error:', err.message);
+    return 0;
+  }
 }
 
 async function getConnections(roomCode) {

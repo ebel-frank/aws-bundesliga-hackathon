@@ -374,9 +374,16 @@ class ArenaController extends GetxController {
     if (Get.isSnackbarOpen) {
       Get.closeAllSnackbars();
     }
+    final String subtitle;
+    if (correct) {
+      // Points can lag behind (server scores async); avoid a misleading "+0 XP".
+      subtitle = points > 0 ? '+$points XP' : 'Nice one! Points updating...';
+    } else {
+      subtitle = 'Better luck on the next one';
+    }
     Get.snackbar(
       correct ? '✓ Correct!' : '✗ Wrong',
-      correct ? '+$points XP' : 'Better luck on the next one',
+      subtitle,
       snackPosition: SnackPosition.TOP,
       duration: const Duration(seconds: 2),
       backgroundColor: const Color(0xDD1A2138),
