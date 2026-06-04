@@ -430,18 +430,31 @@ class ArenaController extends GetxController {
         data: {'matchId': matchId},
       );
     }
-    // Navigate ourselves immediately; peers follow on the broadcast.
-    _handleMatchEnded({'data': {}});
+    // Navigate ourselves immediately to results.
+    _navigateToEnd();
   }
 
-  /// Handle match ended signal (stream finished).
-  void _handleMatchEnded(Map<String, dynamic> msg) {
-    // If questions_resolved hasn't already navigated us, go to end screen
+  /// Navigate to the end/results screen. Shared by endGameForAll + _handleMatchEnded.
+  void _navigateToEnd() {
     if (currentScreen.value == ArenaScreen.end) return;
 
     _countdownTimer?.cancel();
     activeRound.value = null;
 
+    // Fall back to current squad ordering if we have no leaderboard yet.
+    final members = squad.value?.members ?? [];
+    if (leaderboard.isEmpty && members.isNotEmpty) {
+      final lb = List.of(members)..sort((a, b) => b.totalXP.compareTo(a.totalXP));
+      leaderboard.assignAll(lb);
+    }
+
+    _awardEndBadges();
+    currentScreen.value = ArenaScreen.end;
+    Get.offNamed(AppRoutes.arenaEnd);
+  }
+
+  /// Handle match ended signal (stream finished).
+  void _handleMatchEnded(Map<String, dynamic> msg) {
     // Apply final leaderboard if the match-ended payload carries one.
     final data = msg['data'] as Map<String, dynamic>?;
     final serverLb = data?['leaderboard'] as Map<String, dynamic>?;
@@ -449,18 +462,7 @@ class ArenaController extends GetxController {
       _applyServerLeaderboard(serverLb);
     }
 
-    // Fall back to current squad ordering if we somehow have no leaderboard.
-    final members = squad.value?.members ?? [];
-    if (leaderboard.isEmpty && members.isNotEmpty) {
-      final lb = List.of(members)..sort((a, b) => b.totalXP.compareTo(a.totalXP));
-      leaderboard.assignAll(lb);
-    }
-
-    // Award badges from the final standings.
-    _awardEndBadges();
-
-    currentScreen.value = ArenaScreen.end;
-    Get.toNamed(AppRoutes.arenaEnd);
+    _navigateToEnd();
   }
 
   /// Derive end-of-match badges for the local player from final results.
