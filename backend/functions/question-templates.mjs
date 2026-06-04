@@ -66,27 +66,27 @@ function eventsAfter(events, eventId) {
 // the selector). Rare events (penalty) get a slightly higher cap.
 export const TEMPLATE_META = {
   // Kick-off conceptual markets — one each per match.
-  ko_final_result:      { dimension: 'result',     maxPerMatch: 1 },
-  ko_over_under_25:     { dimension: 'goals',       maxPerMatch: 1 },
-  ko_corners_85:        { dimension: 'corners',     maxPerMatch: 1 },
-  ko_first_scorer_team: { dimension: 'goals',       maxPerMatch: 1 },
-  ko_total_passes_800:  { dimension: 'possession',  maxPerMatch: 1 },
-  ko_goal_first_15:     { dimension: 'goals',       maxPerMatch: 1 },
-  ko_possession_55:     { dimension: 'possession',  maxPerMatch: 1 },
+  ko_final_result:      { dimension: 'result',     maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  ko_over_under_25:     { dimension: 'goals',       maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  ko_corners_85:        { dimension: 'corners',     maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  ko_first_scorer_team: { dimension: 'goals',       maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  ko_total_passes_800:  { dimension: 'possession',  maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  ko_goal_first_15:     { dimension: 'goals',       maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  ko_possession_55:     { dimension: 'possession',  maxPerMatch: 1, resolutionType: 'endOfMatch' },
   // Recurring real-time "moment" templates.
-  rt_goal_box_trivia:    { dimension: 'goals',      maxPerMatch: 2 },
-  rt_next_shot_goal:     { dimension: 'shots',      maxPerMatch: 2 },
-  rt_corner_to_shot:     { dimension: 'corners',    maxPerMatch: 2 },
-  rt_card_second_booking:{ dimension: 'discipline', maxPerMatch: 2 },
-  rt_sub_impact:         { dimension: 'player',     maxPerMatch: 2 },
-  rt_freekick_on_target: { dimension: 'shots',      maxPerMatch: 2 },
-  rt_penalty_save:       { dimension: 'goals',      maxPerMatch: 3 },
-  rt_offside_repeat:     { dimension: 'discipline', maxPerMatch: 2 },
+  rt_goal_box_trivia:    { dimension: 'goals',      maxPerMatch: 2, resolutionType: 'immediate' },
+  rt_next_shot_goal:     { dimension: 'shots',      maxPerMatch: 2, resolutionType: 'deferred' },
+  rt_corner_to_shot:     { dimension: 'corners',    maxPerMatch: 2, resolutionType: 'deferred' },
+  rt_card_second_booking:{ dimension: 'discipline', maxPerMatch: 2, resolutionType: 'endOfMatch' },
+  rt_sub_impact:         { dimension: 'player',     maxPerMatch: 2, resolutionType: 'endOfMatch' },
+  rt_freekick_on_target: { dimension: 'shots',      maxPerMatch: 2, resolutionType: 'deferred' },
+  rt_penalty_save:       { dimension: 'goals',      maxPerMatch: 3, resolutionType: 'deferred' },
+  rt_offside_repeat:     { dimension: 'discipline', maxPerMatch: 2, resolutionType: 'endOfMatch' },
   // New real-time templates.
-  rt_next_goal_team:     { dimension: 'goals',      maxPerMatch: 1 },
-  rt_card_burst:         { dimension: 'discipline', maxPerMatch: 2 },
-  rt_shot_wide_response: { dimension: 'shots',      maxPerMatch: 2 },
-  rt_sub_team_next_goal: { dimension: 'player',     maxPerMatch: 1 },
+  rt_next_goal_team:     { dimension: 'goals',      maxPerMatch: 1, resolutionType: 'endOfMatch' },
+  rt_card_burst:         { dimension: 'discipline', maxPerMatch: 2, resolutionType: 'deferred' },
+  rt_shot_wide_response: { dimension: 'shots',      maxPerMatch: 2, resolutionType: 'deferred' },
+  rt_sub_team_next_goal: { dimension: 'player',     maxPerMatch: 1, resolutionType: 'endOfMatch' },
 };
 
 export function templateDimension(id) {
@@ -95,6 +95,10 @@ export function templateDimension(id) {
 
 export function templateCap(id) {
   return TEMPLATE_META[id]?.maxPerMatch ?? 2;
+}
+
+export function templateResolutionType(id) {
+  return TEMPLATE_META[id]?.resolutionType || 'deferred';
 }
 
 // ─── Templates ──────────────────────────────────────────────────
