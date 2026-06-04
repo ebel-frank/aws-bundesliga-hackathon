@@ -110,12 +110,10 @@ class _RoomCardWidgetState extends State<RoomCardWidget> {
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(8),
-                    color: widget.isJoined
-                        ? AppColors.cardBorder
-                        : AppColors.arenaAccent,
+                    color: AppColors.arenaAccent,
                   ),
                   child: Text(
-                    widget.isJoined ? 'JOINED' : 'JOIN',
+                    widget.isJoined ? 'CONTINUE' : 'JOIN',
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 0.5),
                   ),
                 ),
