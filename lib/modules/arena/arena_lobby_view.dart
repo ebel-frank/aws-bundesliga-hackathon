@@ -197,18 +197,19 @@ class _MatchCardState extends State<_MatchCard> {
         child: Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.cardSurface,
             borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 8, offset: const Offset(0, 3))],
+            border: Border.all(color: AppColors.cardBorder, width: 1),
           ),
           child: Stack(
             children: [
               // Background team badges (blended)
               if (widget.match.homeTeamBadge.isNotEmpty)
                 Positioned(
-                  left: -40,
-                  top: 0,
-                  bottom: 0,
+                  left: -100,
+                  top: -10,
+                  bottom: -10,
+                  width: 200,
                   child: Opacity(
                     opacity: 0.06,
                     child: SvgPicture.asset(
@@ -219,9 +220,10 @@ class _MatchCardState extends State<_MatchCard> {
                 ),
               if (widget.match.awayTeamBadge.isNotEmpty)
                 Positioned(
-                  right: -40,
-                  top: 0,
-                  bottom: 0,
+                  right: -100,
+                  top: -10,
+                  bottom: -10,
+                  width: 200,
                   child: Opacity(
                     opacity: 0.06,
                     child: SvgPicture.asset(
@@ -238,7 +240,7 @@ class _MatchCardState extends State<_MatchCard> {
                     // League + date row
                     Row(
                       children: [
-                        Text(widget.match.league, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.grey.shade600)),
+                        Text(widget.match.league, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
                         const Spacer(),
                         if (widget.match.status == 'live')
                           Container(
@@ -254,7 +256,7 @@ class _MatchCardState extends State<_MatchCard> {
                             ),
                           )
                         else
-                          Text('${widget.match.matchDate} · ${widget.match.matchTime}', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                          Text('${widget.match.matchDate} · ${widget.match.matchTime}', style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
                       ],
                     ),
                     const SizedBox(height: 14),
@@ -267,22 +269,24 @@ class _MatchCardState extends State<_MatchCard> {
                             children: [
                               _badge(widget.match.homeTeamBadge),
                               const SizedBox(width: 10),
-                              Expanded(child: Text(widget.match.homeTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1A2138)), overflow: TextOverflow.ellipsis)),
+                              Expanded(child: Text(widget.match.homeTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis)),
                             ],
                           ),
                         ),
+                        const SizedBox(width: 12),
                         // VS pill
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(color: const Color(0xFF1A2138), borderRadius: BorderRadius.circular(8)),
+                          decoration: BoxDecoration(color: AppColors.arenaAccent, borderRadius: BorderRadius.circular(8)),
                           child: Text(widget.match.matchTime, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
                         ),
+                        const SizedBox(width: 12),
                         // Away
                         Expanded(
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Expanded(child: Text(widget.match.awayTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1A2138)), overflow: TextOverflow.ellipsis, textAlign: TextAlign.right)),
+                              Expanded(child: Text(widget.match.awayTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis, textAlign: TextAlign.right)),
                               const SizedBox(width: 10),
                               _badge(widget.match.awayTeamBadge),
                             ],
@@ -294,9 +298,9 @@ class _MatchCardState extends State<_MatchCard> {
                     // Bottom info
                     Row(
                       children: [
-                        Icon(Icons.people_outline, size: 15, color: Colors.grey.shade500),
+                        const Icon(Icons.people_outline, size: 15, color: AppColors.textMuted),
                         const SizedBox(width: 4),
-                        Text('${widget.match.roomCount} rooms', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                        Text('${widget.match.roomCount} rooms', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
                         const Spacer(),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
@@ -441,21 +445,34 @@ class _RoomListPage extends StatelessWidget {
     return GestureDetector(
       onTap: () => _showCreateRoomSheet(context),
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.cardSurface,
+          gradient: LinearGradient(
+            colors: [AppColors.arenaAccent.withValues(alpha: 0.15), AppColors.cardSurface],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.arenaAccent.withValues(alpha: 0.5)),
+          border: Border.all(color: AppColors.arenaAccent.withValues(alpha: 0.4)),
         ),
-        child: const Row(
+        child: Row(
           children: [
-            Icon(Icons.add_circle_outline, color: AppColors.arenaAccent, size: 22),
-            SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Create Room', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-              Text('Start your own squad', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.arenaAccent.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.add_rounded, color: AppColors.arenaAccent, size: 24),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Create Room', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+              SizedBox(height: 2),
+              Text('Start your own prediction squad', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
             ])),
-            Icon(Icons.arrow_forward_ios, color: AppColors.textMuted, size: 16),
+            const Icon(Icons.arrow_forward_ios_rounded, color: AppColors.arenaAccent, size: 16),
           ],
         ),
       ),
@@ -481,7 +498,15 @@ class _RoomListPage extends StatelessWidget {
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
         child: Container(
-          decoration: const BoxDecoration(color: AppColors.cardSurface, borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24))),
+          decoration: BoxDecoration(
+            color: AppColors.cardSurface,
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+            image: const DecorationImage(
+              image: AssetImage('assets/images/bundesliga_bg.jpg'),
+              fit: BoxFit.cover,
+              opacity: 0.15,
+            ),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(

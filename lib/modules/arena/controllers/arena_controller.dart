@@ -133,6 +133,18 @@ class ArenaController extends GetxController {
     } finally {
       isLoadingMatches.value = false;
     }
+    // Fetch room counts for each match in background
+    _updateRoomCounts();
+  }
+
+  /// Updates room counts for all loaded matches.
+  Future<void> _updateRoomCounts() async {
+    for (int i = 0; i < availableMatches.length; i++) {
+      try {
+        final rooms = await ApiService.getRooms(availableMatches[i].matchId);
+        availableMatches[i] = availableMatches[i].copyWith(roomCount: rooms.length);
+      } catch (_) {}
+    }
   }
 
   /// User selects a match to see its rooms.
