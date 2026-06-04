@@ -106,8 +106,11 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                   // Missed questions banner (tap to answer for catch-up points)
                   _buildMissedQuestionsBar(context),
                   const SizedBox(height: 8),
-                  // Countdown timer
-                  Obx(() => CountdownTimerWidget(seconds: controller.countdownSeconds.value)),
+                  // Countdown timer — only show when a question is active
+                  Obx(() {
+                    if (controller.activeRound.value == null) return const SizedBox.shrink();
+                    return CountdownTimerWidget(seconds: controller.countdownSeconds.value);
+                  }),
                   const SizedBox(height: 20),
                   // Question + options
                   Expanded(child: _buildQuestionCard()),

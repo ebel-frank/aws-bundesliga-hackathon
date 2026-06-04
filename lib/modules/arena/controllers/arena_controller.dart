@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../../app/routes/app_routes.dart';
@@ -679,6 +680,18 @@ class ArenaController extends GetxController {
 
     final secondsTaken = round.timeLimitSeconds - countdownSeconds.value;
     _sendPick(round.roundId, option, secondsTaken < 0 ? 0 : secondsTaken);
+
+    // Show brief confirmation
+    Get.snackbar(
+      '✓ Answer Locked!',
+      'Your pick: $option',
+      snackPosition: SnackPosition.TOP,
+      duration: const Duration(seconds: 2),
+      backgroundColor: const Color(0xDD1A2138),
+      colorText: const Color(0xFFFFFFFF),
+      margin: const EdgeInsets.all(12),
+      borderRadius: 10,
+    );
 
     // Dismiss immediately — stop displaying the answered question.
     _countdownTimer?.cancel();
