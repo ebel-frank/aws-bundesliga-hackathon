@@ -208,6 +208,8 @@ class ArenaController extends GetxController {
         _handleQuestionsResolved(msg);
       } else if (action == 'match_ended') {
         _handleMatchEnded(msg);
+      } else if (action == 'end_game') {
+        _handleMatchEnded(msg);
       } else if (action == 'chat_message') {
         _handleChatMessage(msg);
       } else if (action == 'reaction') {
@@ -413,6 +415,23 @@ class ArenaController extends GetxController {
       }).toList();
       squad.value = current.copyWith(members: updatedMembers);
     }
+  }
+
+  /// Host ends the demo game manually. Tells the backend to resolve all
+  /// pending questions + stop the stream, and broadcasts so every player
+  /// navigates to the results screen.
+  void endGameForAll() {
+    final roomCode = squad.value?.roomCode ?? '';
+    final matchId = selectedMatch.value?.matchId ?? '';
+    if (roomCode.isNotEmpty) {
+      _roomWs.send(
+        action: 'end_game',
+        roomCode: roomCode,
+        data: {'matchId': matchId},
+      );
+    }
+    // Navigate ourselves immediately; peers follow on the broadcast.
+    _handleMatchEnded({'data': {}});
   }
 
   /// Handle match ended signal (stream finished).

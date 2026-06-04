@@ -323,10 +323,54 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                 child: const Icon(Icons.question_answer_outlined, size: 18, color: AppColors.arenaAccent),
               ),
             ),
+            // End Game button — demo mode only, host can end early.
+            if (controller.squad.value?.demoMode ?? false) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _confirmEndGame(context),
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: AppColors.error.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.stop_circle_outlined, size: 18, color: AppColors.error),
+                ),
+              ),
+            ],
           ],
         ),
       );
     });
+  }
+
+  void _confirmEndGame(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cardSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('End Game?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+        content: const Text(
+          'This will end the game for everyone and show the final results.',
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel', style: TextStyle(color: AppColors.arenaAccent, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              controller.endGameForAll();
+            },
+            child: const Text('End Game', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showQAHistory(BuildContext context) {

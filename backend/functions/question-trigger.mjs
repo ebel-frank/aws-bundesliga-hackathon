@@ -3,7 +3,7 @@ import { DynamoDBDocumentClient, ScanCommand, DeleteCommand, PutCommand, GetComm
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { BedrockRuntimeClient, ConverseCommand } from '@aws-sdk/client-bedrock-runtime';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { findTriggeredTemplates, getTemplate, resolveTemplate, TEMPLATES, templateDimension, templateCap, templateResolutionType } from './question-templates.mjs';
+import { findTriggeredTemplates, getTemplate, resolveTemplate, TEMPLATES, templateDimension, templateCap } from './question-templates.mjs';
 import { parseXmlEvents } from './dfl-events.mjs';
 
 const ddbClient = new DynamoDBClient({});
@@ -145,8 +145,6 @@ export const handler = async (event) => {
       // In demo mode, keep only 2 kick-off questions so in-play moments still fit the 5-question budget.
       if (demoMode) kickoffQueue = kickoffQueue.slice(0, 2);
     }
-    // Demo mode: no kick-off questions at all (they resolve at full time, too slow for a demo).
-    if (demoMode) kickoffQueue = [];
     // Drop any kick-off templates that have already hit their cap (defensive
     // against replays where the queue persisted but questions were created).
     kickoffQueue = kickoffQueue.filter(
@@ -154,8 +152,7 @@ export const handler = async (event) => {
     );
 
     // Decide whether this moment should be an AI "color" question instead.
-    // AI questions resolve at the final whistle, so they're disabled in demo mode.
-    const aiEligible = !demoMode && AI_QUESTION_TRIGGERS.has(dflEvent.eventType);
+    const aiEligible = AI_QUESTION_TRIGGERS.has(dflEvent.eventType);
 
     // Filter realtime templates: respect per-template caps, avoid back-to-back
     // repeats (recent window), and only allow a capped repeat for a DIFFERENT
@@ -164,8 +161,6 @@ export const handler = async (event) => {
     const recentWindow = state.recentTemplateIds.slice(-4);
     const eligibleRealtime = templates
       .filter((t) => t.section !== 'kickoff')
-      // Demo mode: only fast-resolving questions (immediate/deferred), never endOfMatch.
-      .filter((t) => !demoMode || templateResolutionType(t.id) !== 'endOfMatch')
       .filter((t) => {
         const used = state.usedTemplateCounts[t.id] || 0;
         if (used >= templateCap(t.id)) return false; // hit cap

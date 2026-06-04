@@ -129,6 +129,37 @@ async function persistPick(data = {}) {
   }
 }
 
+/**
+ * Host-initiated game end (demo mode): resolve all pending questions and
+ * compute final scores. The resolver broadcasts `questions_resolved` with the
+ * authoritative leaderboard; the app navigates everyone to results.
+ */
+async function endMatch(roomCode, data = {}) {
+  const matchId = data.matchId;
+  if (!matchId || !QUESTION_TRIGGER_FUNCTION) {
+    console.warn('endMatch missing matchId / trigger function — skipping');
+    return;
+  }
+  // Free the started-room guard so the match can be re-demoed later.
+  for (const key of [...startedRooms]) {
+    if (key.startsWith(`${roomCode}:`)) startedRooms.delete(key);
+  }
+  try {
+    await lambdaClient.send(new InvokeCommand({
+      FunctionName: QUESTION_TRIGGER_FUNCTION,
+      InvocationType: 'RequestResponse',
+      Payload: Buffer.from(JSON.stringify({
+        resolve: true,
+        matchId,
+        roomCode,
+      })),
+    }));
+    console.log(`Match ${matchId} ended by host; resolution triggered`);
+  } catch (err) {
+    console.error('endMatch invoke failed:', err.message);
+  }
+}
+
 export const connect = async (event) => {
   const connectionId = event.requestContext.connectionId;
   const roomCode = event.queryStringParameters?.roomCode || '';
@@ -193,6 +224,11 @@ export const message = async (event) => {
   // Host started the game → auto-reset + auto-stream the real match data.
   if (action === 'game_started') {
     await orchestrateMatchStart(roomCode, data);
+  }
+
+  // Host ended the demo game → resolve all questions + compute final scores.
+  if (action === 'end_game') {
+    await endMatch(roomCode, data);
   }
 
   // Get all connections in the same room
