@@ -4,7 +4,7 @@ import { DynamoDBDocumentClient, ScanCommand, DeleteCommand } from '@aws-sdk/lib
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 
-const s3 = new S3Client({ region: 'eu-central-1' });
+const s3 = new S3Client({ region: process.env.DFL_DATA_REGION || process.env.AWS_REGION || 'us-east-1' });
 const ddbClient = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(ddbClient);
 const lambdaClient = new LambdaClient({});
@@ -39,11 +39,14 @@ export const processEvents = async (event) => {
   try {
     const { bucket, eventsKey, matchInfoKey, matchId, roomCode, delayMs = 3000, maxEvents = 0 } = event;
 
+    // Default to the stack's own DFL data bucket if not explicitly provided.
+    const effectiveBucket = bucket || process.env.DFL_DATA_BUCKET;
+
     // Support legacy 'key' parameter
     const effectiveEventsKey = eventsKey || event.key;
 
-    if (!bucket || !effectiveEventsKey || !matchId) {
-      return { statusCode: 400, body: JSON.stringify({ error: 'bucket, eventsKey (or key), and matchId are required' }) };
+    if (!effectiveBucket || !effectiveEventsKey || !matchId) {
+      return { statusCode: 400, body: JSON.stringify({ error: 'bucket (or DFL_DATA_BUCKET env), eventsKey (or key), and matchId are required' }) };
     }
 
     // 1. Load match information for player/team name resolution
@@ -52,8 +55,8 @@ export const processEvents = async (event) => {
     let matchInfo = null;
 
     if (matchInfoKey) {
-      console.log(`Loading match info from s3://${bucket}/${matchInfoKey}`);
-      const infoResponse = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: matchInfoKey }));
+      console.log(`Loading match info from s3://${effectiveBucket}/${matchInfoKey}`);
+      const infoResponse = await s3.send(new GetObjectCommand({ Bucket: effectiveBucket, Key: matchInfoKey }));
       const infoXml = await infoResponse.Body.transformToString();
       const parsed = parseMatchInformation(infoXml);
       playerLookup = parsed.players;
@@ -63,8 +66,8 @@ export const processEvents = async (event) => {
     }
 
     // 2. Read and parse events XML from S3
-    console.log(`Loading events from s3://${bucket}/${effectiveEventsKey}`);
-    const eventsResponse = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: effectiveEventsKey }));
+    console.log(`Loading events from s3://${effectiveBucket}/${effectiveEventsKey}`);
+    const eventsResponse = await s3.send(new GetObjectCommand({ Bucket: effectiveBucket, Key: effectiveEventsKey }));
     const xmlString = await eventsResponse.Body.transformToString();
     const events = parseXmlEvents(xmlString, matchId, playerLookup, teamLookup);
     console.log(`Parsed ${events.length} events`);
@@ -138,6 +141,10 @@ export const processEvents = async (event) => {
             matchId,
             roomCode: targetRoomCode,
             matchSummary: matchInfo,
+            bucket: effectiveBucket,
+            eventsKey: effectiveEventsKey,
+            playerLookup,
+            teamLookup,
           })),
         }));
         console.log('Question resolution triggered');
@@ -162,6 +169,10 @@ export const processEvents = async (event) => {
           matchId,
           roomCode: targetRoomCode,
           matchSummary: matchInfo,
+          bucket: effectiveBucket,
+          eventsKey: effectiveEventsKey,
+          playerLookup,
+          teamLookup,
         })),
       }));
       console.log('End-of-stream resolution triggered');
@@ -192,7 +203,7 @@ export const processEvents = async (event) => {
 /**
  * Parse MatchInformations XML to extract player names, team info, and match metadata.
  */
-function parseMatchInformation(xmlString) {
+export function parseMatchInformation(xmlString) {
   const players = {};
   const teams = {};
   const matchInfo = {};
@@ -268,7 +279,7 @@ function parseMatchInformation(xmlString) {
 /**
  * Parse DFL Events XML and enrich with player/team names.
  */
-function parseXmlEvents(xmlString, matchId, playerLookup, teamLookup) {
+export function parseXmlEvents(xmlString, matchId, playerLookup, teamLookup) {
   const events = [];
   const eventRegex = /<Event\s([^>]+)>([\s\S]*?)<\/Event>/g;
   let match;
@@ -382,10 +393,68 @@ function parseXmlEvents(xmlString, matchId, playerLookup, teamLookup) {
       else if (innerXml.includes('<ThrowIn')) event.subType = 'ThrowIn';
     }
 
+    // ── Resolver-specific attribute extraction ──────────────────
+    // These power the deterministic question templates/resolvers.
+
+    // Shots & goals: ShotAtGoal carries InsideBox, xG, Player, Team.
+    const shotMatch = innerXml.match(/<ShotAtGoal\s([^>]+)/);
+    if (shotMatch) {
+      const sa = parseAttributes(shotMatch[1]);
+      event.insideBox = sa['InsideBox'] === 'true';
+      event.xG = parseFloat(sa['xG'] || '0');
+      event.playerId = sa['Player'] || event.playerId || null;
+      event.teamId = sa['Team'] || event.teamId || null;
+    }
+
+    // Goal: pull the running score from SuccessfulShot (e.g. "1:0").
+    const goalMatch = innerXml.match(/<SuccessfulShot\s([^>]+)/);
+    if (goalMatch) {
+      const gs = parseAttributes(goalMatch[1]);
+      event.currentResult = gs['CurrentResult'] || null; // "home:away"
+      event.assistId = gs['Assist'] || null;
+    }
+
+    // Card: Caution carries Player, Team, CardColor.
+    const cardMatch = innerXml.match(/<Caution\s([^>]+)/);
+    if (cardMatch) {
+      const ca = parseAttributes(cardMatch[1]);
+      event.playerId = ca['Player'] || event.playerId || null;
+      event.teamId = ca['Team'] || event.teamId || null;
+      event.cardColor = ca['CardColor'] || event.cardColor || 'yellow';
+    }
+
+    // Substitution: PlayerIn / PlayerOut / Team.
+    const subMatch = innerXml.match(/<Substitution\s([^>]+)/);
+    if (subMatch) {
+      const su = parseAttributes(subMatch[1]);
+      event.playerInId = su['PlayerIn'] || null;
+      event.playerOutId = su['PlayerOut'] || null;
+      event.teamId = su['Team'] || event.teamId || null;
+      event.playerId = event.playerInId; // for name enrichment/summary
+    }
+
+    // Offside: Player / Team.
+    const offsideMatch = innerXml.match(/<Offside\s([^>]+)/);
+    if (offsideMatch) {
+      const off = parseAttributes(offsideMatch[1]);
+      event.playerId = off['Player'] || event.playerId || null;
+      event.teamId = off['Team'] || event.teamId || null;
+    }
+
+    // Corner: Side / Team.
+    const cornerMatch = innerXml.match(/<CornerKick\s([^>]+)/);
+    if (cornerMatch) {
+      const co = parseAttributes(cornerMatch[1]);
+      event.cornerSide = co['Side'] || null;
+      event.teamId = co['Team'] || event.teamId || null;
+    }
+
     // Enrich with player/team names
     event.playerName = resolvePlayerName(event.playerId, playerLookup);
     event.recipientName = resolvePlayerName(event.recipientId, playerLookup);
     event.teamName = resolveTeamName(event.teamId, teamLookup);
+    event.playerInName = resolvePlayerName(event.playerInId, playerLookup);
+    event.playerOutName = resolvePlayerName(event.playerOutId, playerLookup);
 
     // Generate human-readable summary
     event.summary = generateSummary(event);

@@ -2,9 +2,19 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Live Prediction Arena - Backend API
 
+Parameters:
+  DflDataBucketName:
+    Type: String
+    Default: hackathon-data-686384344354
+    Description: Existing S3 bucket that holds the DFL match XML data.
+  DflDataBucketRegion:
+    Type: String
+    Default: eu-central-1
+    Description: Region of the DFL data bucket (read cross-region by the Lambda).
+
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs24.x
     Timeout: 30
     MemorySize: 256
     Environment:
@@ -258,11 +268,13 @@ Resources:
           CONNECTIONS_TABLE: !Ref ConnectionsTable
           WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
           QUESTION_TRIGGER_FUNCTION: !Ref QuestionTriggerFunction
+          DFL_DATA_BUCKET: !Ref DflDataBucketName
+          DFL_DATA_REGION: !Ref DflDataBucketRegion
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
         - S3ReadPolicy:
-            BucketName: '*'
+            BucketName: !Ref DflDataBucketName
         - Statement:
             - Effect: Allow
               Action: execute-api:ManageConnections
@@ -398,11 +410,16 @@ Resources:
     Properties:
       Handler: websocket.message
       CodeUri: functions/
+      Environment:
+        Variables:
+          QUESTIONS_TABLE: !Ref QuestionsTable
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref RoomsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QuestionsTable
         - Statement:
             - Effect: Allow
               Action: execute-api:ManageConnections
@@ -516,3 +533,7 @@ Outputs:
   MatchStateTableName:
     Description: Match state buffer table
     Value: !Ref MatchStateTable
+
+  DflDataBucketName:
+    Description: S3 bucket for DFL match XML data
+    Value: !Ref DflDataBucketName

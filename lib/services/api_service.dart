@@ -6,7 +6,7 @@ import '../models/squad_model.dart';
 /// Central API service for communicating with the AWS backend.
 /// Replace [baseUrl] with your deployed API Gateway URL after running `sam deploy`.
 class ApiService {
-  static const String baseUrl = 'https://ktdfmw9ukf.execute-api.us-east-1.amazonaws.com/prod';
+  static const String baseUrl = 'https://g6dqdwf5aa.execute-api.us-east-1.amazonaws.com/prod';
 
   static final Dio _dio = Dio(BaseOptions(
     baseUrl: baseUrl,

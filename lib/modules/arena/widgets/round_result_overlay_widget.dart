@@ -140,7 +140,7 @@ class RoundResultOverlayWidget extends StatelessWidget {
           children: [
             if (controller.speedBonusEarned.value)
               _BonusPill(
-                text: '⚡ Speed +5',
+                text: '⚡ Fast Answer',
                 color: AppColors.neonGreen,
               ),
             if (controller.speedBonusEarned.value &&

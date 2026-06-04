@@ -1,10 +1,58 @@
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, PutCommand, DeleteCommand, ScanCommand } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBDocumentClient, PutCommand, DeleteCommand, ScanCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 
 const client = new DynamoDBClient({});
 const ddb = DynamoDBDocumentClient.from(client);
 const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE;
+const QUESTIONS_TABLE = process.env.QUESTIONS_TABLE;
+const CATCHUP_GRACE_SECONDS = 20; // late answers accepted this long after the timer
+
+/**
+ * Persist a player's prediction pick into the question's userPicks map so the
+ * QuestionTrigger/Resolver functions can score it server-side. Records
+ * answeredAt (server-authoritative speed), late (catch-up answers), and
+ * changeCount (kick-off answer changes).
+ */
+async function persistPick(data = {}) {
+  const { matchId, questionId, userId, pick } = data;
+  if (!matchId || !questionId || !userId || pick == null) return;
+  try {
+    const res = await ddb.send(new GetCommand({ TableName: QUESTIONS_TABLE, Key: { matchId, questionId } }));
+    const q = res.Item;
+    if (!q || q.status === 'resolved') return; // can't answer a resolved question
+
+    const now = Date.now();
+    const createdMs = q.createdAt ? new Date(q.createdAt).getTime() : now;
+    const timeLimitMs = (q.timeLimit || 15) * 1000;
+    const isKickoff = q.category === 'kickoff';
+    const elapsedMs = now - createdMs;
+
+    // Catch-up rule: realtime questions accept late answers only within the grace
+    // window (scored at the flat minimum later). Kick-off questions stay open all match.
+    const late = elapsedMs > timeLimitMs;
+    if (!isKickoff && late && elapsedMs > timeLimitMs + CATCHUP_GRACE_SECONDS * 1000) {
+      return; // too late even for catch-up
+    }
+
+    const picks = q.userPicks || {};
+    const existing = picks[userId];
+    const prevChange = (typeof existing === 'object' && existing.changeCount) || 0;
+    const existingPick = existing == null ? null : (typeof existing === 'string' ? existing : existing.pick);
+    const isChange = existingPick != null && existingPick !== pick;
+
+    picks[userId] = {
+      pick,
+      answeredAt: new Date(now).toISOString(),
+      late,
+      changeCount: prevChange + (isChange ? 1 : 0),
+    };
+
+    await ddb.send(new PutCommand({ TableName: QUESTIONS_TABLE, Item: { ...q, userPicks: picks } }));
+  } catch (err) {
+    console.error('persistPick error:', err.message);
+  }
+}
 
 export const connect = async (event) => {
   const connectionId = event.requestContext.connectionId;
@@ -36,6 +84,11 @@ export const message = async (event) => {
   const connectionId = event.requestContext.connectionId;
   const body = JSON.parse(event.body || '{}');
   const { action, roomCode, data } = body;
+
+  // Persist prediction picks so the server can score them authoritatively.
+  if (action === 'submit_pick') {
+    await persistPick(data);
+  }
 
   // Get all connections in the same room
   const result = await ddb.send(new ScanCommand({

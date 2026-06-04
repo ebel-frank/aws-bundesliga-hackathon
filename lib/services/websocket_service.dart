@@ -6,7 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 /// WebSocket service for real-time squad communication.
 /// Replace [wsUrl] with your deployed WebSocket API Gateway URL after running `sam deploy`.
 class WebSocketService {
-  static const String wsUrl = 'wss://aqalim0031.execute-api.us-east-1.amazonaws.com/prod';
+  static const String wsUrl = 'wss://n4t5lyhzcd.execute-api.us-east-1.amazonaws.com/prod';
 
   WebSocketChannel? _channel;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();

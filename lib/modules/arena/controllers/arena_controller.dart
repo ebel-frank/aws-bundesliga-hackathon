@@ -85,6 +85,9 @@ class ArenaController extends GetxController {
   final RxInt countdownSeconds = 15.obs;
   final RxString myPick = ''.obs;
   final RxBool hasLockedIn = false.obs;
+  // True once the live timer has elapsed but the question is still answerable
+  // for minimum (catch-up) points until it resolves.
+  final RxBool inCatchUp = false.obs;
 
   // ── Leaderboard ───────────────────────────────────────────────
   final RxList<PlayerModel> leaderboard = <PlayerModel>[].obs;
@@ -227,6 +230,7 @@ class ArenaController extends GetxController {
     // Reset pick state and start the round
     myPick.value = '';
     hasLockedIn.value = false;
+    inCatchUp.value = false;
     activeRound.value = newRound;
     countdownSeconds.value = timeLimit;
     currentScreen.value = ArenaScreen.prediction;
@@ -237,7 +241,9 @@ class ArenaController extends GetxController {
     _startCountdown();
   }
 
-  /// Handle end-of-match question resolutions from the backend.
+  /// Handle question resolutions from the backend. Fires live (per-question)
+  /// during the match and again at the final whistle. The server is the source
+  /// of truth for scores and the leaderboard.
   void _handleQuestionsResolved(Map<String, dynamic> msg) {
     final data = msg['data'] as Map<String, dynamic>?;
     if (data == null) return;
@@ -245,47 +251,61 @@ class ArenaController extends GetxController {
     final results = data['results'] as List<dynamic>? ?? [];
     if (results.isEmpty) return;
 
-    // Calculate score: 10 XP per correct answer
-    int correctCount = 0;
-    for (final result in results) {
-      final questionId = result['questionId'] as String? ?? '';
-      final correctAnswer = result['correctAnswer'] as String? ?? '';
-      final userPick = _userPicks[questionId];
-      if (userPick != null && userPick == correctAnswer) {
-        correctCount++;
-      }
+    // 1. Apply the server's authoritative leaderboard if present.
+    final serverLb = data['leaderboard'] as Map<String, dynamic>?;
+    if (serverLb != null && serverLb.isNotEmpty) {
+      _applyServerLeaderboard(serverLb);
     }
 
-    final totalXp = correctCount * 10;
+    // 2. Surface the most recent result to the player as a round-result overlay.
+    //    Find a result the local user actually answered, preferring the last one.
+    for (final result in results.reversed) {
+      final questionId = result['questionId'] as String? ?? '';
+      final myPickForQ = _userPicks[questionId];
+      if (myPickForQ == null) continue;
 
-    // Build leaderboard with current user's score
-    // For now, populate with squad members — current user gets calculated XP, others get 0
-    final members = squad.value?.members ?? [];
-    final lb = members.map((m) {
-      if (m.userId == _currentUserId) {
-        return m.copyWith(totalXP: totalXp);
+      final scores = result['scores'] as Map<String, dynamic>?;
+      final myPoints = (scores?[_currentUserId] as num?)?.toInt() ?? 0;
+      // Server is authoritative: any points means the pick was correct.
+      final correct = myPoints > 0;
+
+      wasCorrect.value = correct;
+      xpEarnedThisRound.value = myPoints;
+      // Fast answers earn well above the catch-up minimum (100); flag a speed badge.
+      speedBonusEarned.value = correct && myPoints >= 600;
+      isDeferred.value = false;
+      newStreak.value = correct ? newStreak.value + 1 : 0;
+
+      // If this resolves the question currently on screen, clear it.
+      if (activeRound.value?.roundId == questionId) {
+        _countdownTimer?.cancel();
+        inCatchUp.value = false;
+        activeRound.value = null;
       }
-      return m.copyWith(totalXP: 0); // Other players' scores would come from backend
-    }).toList();
 
-    // Sort by XP descending
+      // Show the result overlay briefly, then return to waiting for the next Q.
+      if (currentScreen.value != ArenaScreen.end) {
+        currentScreen.value = ArenaScreen.roundResult;
+        Future.delayed(const Duration(seconds: 3), () {
+          if (currentScreen.value == ArenaScreen.roundResult) {
+            currentScreen.value = ArenaScreen.prediction;
+          }
+        });
+      }
+      break;
+    }
+  }
+
+  /// Replace the leaderboard XP totals with the server's authoritative values.
+  void _applyServerLeaderboard(Map<String, dynamic> serverLb) {
+    final members = squad.value?.members ?? [];
+    if (members.isEmpty) return;
+    final lb = members.map((m) {
+      final xp = (serverLb[m.userId] as num?)?.toInt() ?? m.totalXP;
+      return m.copyWith(totalXP: xp);
+    }).toList();
     lb.sort((a, b) => b.totalXP.compareTo(a.totalXP));
     leaderboard.assignAll(lb);
-
-    // Determine badges
-    final badges = <String>[];
-    if (correctCount == results.length && results.isNotEmpty) {
-      badges.add('Perfect Round');
-    }
-    if (correctCount >= 3) {
-      badges.add('Streak Master');
-    }
-    earnedBadges.assignAll(badges);
-
-    // Navigate to end screen
-    _countdownTimer?.cancel();
-    currentScreen.value = ArenaScreen.end;
-    Get.toNamed(AppRoutes.arenaEnd);
   }
 
   /// Handle match ended signal (stream finished).
@@ -296,14 +316,36 @@ class ArenaController extends GetxController {
     _countdownTimer?.cancel();
     activeRound.value = null;
 
-    // Build leaderboard with what we have
+    // Apply final leaderboard if the match-ended payload carries one.
+    final data = msg['data'] as Map<String, dynamic>?;
+    final serverLb = data?['leaderboard'] as Map<String, dynamic>?;
+    if (serverLb != null && serverLb.isNotEmpty) {
+      _applyServerLeaderboard(serverLb);
+    }
+
+    // Fall back to current squad ordering if we somehow have no leaderboard.
     final members = squad.value?.members ?? [];
     if (leaderboard.isEmpty && members.isNotEmpty) {
-      leaderboard.assignAll(members);
+      final lb = List.of(members)..sort((a, b) => b.totalXP.compareTo(a.totalXP));
+      leaderboard.assignAll(lb);
     }
+
+    // Award badges from the final standings.
+    _awardEndBadges();
 
     currentScreen.value = ArenaScreen.end;
     Get.toNamed(AppRoutes.arenaEnd);
+  }
+
+  /// Derive end-of-match badges for the local player from final results.
+  void _awardEndBadges() {
+    final badges = <String>[];
+    if (leaderboard.isNotEmpty && leaderboard.first.userId == _currentUserId) {
+      badges.add('Champion');
+    }
+    if (newStreak.value >= 3) badges.add('Streak Master');
+    if (speedBonusEarned.value) badges.add('Speed Demon');
+    earnedBadges.assignAll(badges);
   }
 
   /// Handle incoming chat message from another player.
@@ -569,15 +611,48 @@ class ArenaController extends GetxController {
     _startCountdown();
   }
 
-  /// Player locks in their answer. Idempotent — ignored if already locked.
-  /// POST /rounds/{roundId}/pick { userId, pick, secondsTaken }
+  /// Player locks in their answer. Sends the pick to the server immediately
+  /// for real-time scoring. Kick-off questions (category 'kickoff') may be
+  /// changed until resolved — at a points penalty applied server-side.
   void lockInPick(String option) {
-    if (hasLockedIn.value) return;
+    final round = activeRound.value;
+    if (round == null) return;
+
+    final isKickoff = round.category == 'kickoff';
+    // Non-kickoff questions lock once; kickoff questions allow changes.
+    if (hasLockedIn.value && !isKickoff) return;
+    // No-op if re-selecting the same option.
+    if (hasLockedIn.value && myPick.value == option) return;
+
+    final isChange = hasLockedIn.value && myPick.value != option;
 
     myPick.value = option;
     hasLockedIn.value = true;
+    _userPicks[round.roundId] = option;
 
-    // TODO: POST /rounds/{roundId}/pick to backend
+    final secondsTaken = round.timeLimitSeconds - countdownSeconds.value;
+
+    _roomWs.send(
+      action: 'submit_pick',
+      roomCode: squad.value?.roomCode ?? '',
+      data: {
+        'matchId': selectedMatch.value?.matchId ?? '',
+        'questionId': round.roundId,
+        'userId': _currentUserId,
+        'pick': option,
+        'secondsTaken': secondsTaken < 0 ? 0 : secondsTaken,
+      },
+    );
+
+    if (isChange) {
+      Get.snackbar(
+        'Answer changed',
+        'Changing a kick-off prediction costs a few points.',
+        snackPosition: SnackPosition.BOTTOM,
+        duration: const Duration(seconds: 2),
+        margin: const EdgeInsets.all(12),
+      );
+    }
   }
 
   /// Alert the user that a new question has arrived — vibrate + system sound.
@@ -605,47 +680,13 @@ class ArenaController extends GetxController {
     });
   }
 
-  /// Called when timer hits 0. Records the pick and waits for next question.
-  /// Correct answers are resolved at match end.
+  /// Called when the per-question live timer hits 0. Rather than clearing the
+  /// question, we enter "catch-up" mode: it stays answerable for minimum points
+  /// until the server resolves it (which arrives via `questions_resolved`).
   void _closeRound() {
     _countdownTimer?.cancel();
-
-    final round = activeRound.value;
-    if (round == null) return;
-
-    // Record the pick (will be resolved at match end)
-    final pick = myPick.value;
-    if (pick.isNotEmpty) {
-      // Store locally for scoring at match end
-      _userPicks[round.roundId] = pick;
-
-      // Send pick to backend via WebSocket
-      _roomWs.send(
-        action: 'submit_pick',
-        roomCode: squad.value?.roomCode ?? '',
-        data: {
-          'questionId': round.roundId,
-          'userId': _currentUserId,
-          'pick': pick,
-        },
-      );
-
-      // Show "answer recorded" state — deferred resolution at match end
-      currentScreen.value = ArenaScreen.roundResult;
-      isDeferred.value = true;
-      wasCorrect.value = false; // Unknown yet
-      xpEarnedThisRound.value = 0; // Will be calculated at match end
-
-      // After 3 seconds, go back to waiting for next question
-      Future.delayed(const Duration(seconds: 3), () {
-        activeRound.value = null;
-        currentScreen.value = ArenaScreen.prediction;
-      });
-    } else {
-      // No pick made — skip overlay, go straight back to waiting
-      activeRound.value = null;
-      currentScreen.value = ArenaScreen.prediction;
-    }
+    if (activeRound.value == null) return;
+    inCatchUp.value = true;
   }
 
   /// Called after all rounds complete. Finalizes game, calculates badges,

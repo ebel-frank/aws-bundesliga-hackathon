@@ -610,41 +610,46 @@ class _SquadLobbyPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        children: [
-          const SizedBox(height: 24),
-          Obx(() => _buildMatchStatus()),
-          const SizedBox(height: 24),
-          // Room code — only for private rooms
-          Obx(() {
-            final isPrivate = controller.squad.value?.isPrivate ?? false;
-            if (!isPrivate) return const SizedBox.shrink();
-            return Column(children: [
-              RoomCodeWidget(code: controller.squad.value?.roomCode ?? '------'),
-              const SizedBox(height: 8),
-              const Text('Share this code with your squad', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 460),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          child: Column(
+            children: [
               const SizedBox(height: 24),
-            ]);
-          }),
-          // Players header
-          Obx(() => Align(alignment: Alignment.centerLeft, child: Text('PLAYERS (${controller.squad.value?.members.length ?? 0}/6)', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textMuted, letterSpacing: 2)))),
-          const SizedBox(height: 12),
-          Obx(() {
-            final members = controller.squad.value?.members ?? [];
-            return GridView.count(crossAxisCount: 3, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), mainAxisSpacing: 16, crossAxisSpacing: 16, childAspectRatio: 0.75, children: List.generate(6, (i) => SquadAvatarWidget(player: i < members.length ? members[i] : null)));
-          }),
-          const Spacer(),
-          Obx(() {
-            final isHost = (controller.squad.value?.members.isNotEmpty ?? false) && controller.squad.value!.members.first.isHost;
-            final isLive = controller.isMatchLive.value;
-            if (isHost && isLive) return _buildStartButton();
-            if (!isLive) return _buildCountdownWaiting();
-            return _buildWaitingForHost();
-          }),
-          const SizedBox(height: 24),
-        ],
+              Obx(() => _buildMatchStatus()),
+              const SizedBox(height: 24),
+              // Room code — only for private rooms
+              Obx(() {
+                final isPrivate = controller.squad.value?.isPrivate ?? false;
+                if (!isPrivate) return const SizedBox.shrink();
+                return Column(children: [
+                  RoomCodeWidget(code: controller.squad.value?.roomCode ?? '------'),
+                  const SizedBox(height: 8),
+                  const Text('Share this code with your squad', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                  const SizedBox(height: 24),
+                ]);
+              }),
+              // Players header
+              Obx(() => Align(alignment: Alignment.centerLeft, child: Text('PLAYERS (${controller.squad.value?.members.length ?? 0}/6)', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textMuted, letterSpacing: 2)))),
+              const SizedBox(height: 12),
+              Obx(() {
+                final members = controller.squad.value?.members ?? [];
+                return GridView.count(crossAxisCount: 3, shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), mainAxisSpacing: 16, crossAxisSpacing: 16, childAspectRatio: 0.75, children: List.generate(6, (i) => SquadAvatarWidget(player: i < members.length ? members[i] : null)));
+              }),
+              const Spacer(),
+              Obx(() {
+                final isHost = (controller.squad.value?.members.isNotEmpty ?? false) && controller.squad.value!.members.first.isHost;
+                final isLive = controller.isMatchLive.value;
+                if (isHost && isLive) return _buildStartButton();
+                if (!isLive) return _buildCountdownWaiting();
+                return _buildWaitingForHost();
+              }),
+              const SizedBox(height: 24),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -27,8 +27,8 @@ class _CognitoSessionStorage extends CognitoStorage {
 }
 
 class AuthService {
-  static const String userPoolId = 'us-east-1_JeD9doY98';
-  static const String clientId = '3pris3csbkthkbsqm5gn366tsb';
+  static const String userPoolId = 'us-east-1_9bOkZu1vP';
+  static const String clientId = '1lmve96sii8qkndr3iu1e2vivs';
   static const String region = 'us-east-1';
 
   static final _cognitoStorage = _CognitoSessionStorage();

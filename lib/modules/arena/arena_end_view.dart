@@ -1,9 +1,7 @@
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:get/get.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:screenshot/screenshot.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -243,14 +241,16 @@ class ArenaEndView extends GetView<ArenaController> {
       );
       if (imageBytes == null) return;
 
-      final directory = await getTemporaryDirectory();
-      final filePath = '${directory.path}/prediction_result.png';
-      final file = File(filePath);
-      await file.writeAsBytes(imageBytes);
-
+      // Use in-memory bytes so this works on web (no dart:io / filesystem) and mobile.
       await SharePlus.instance.share(
         ShareParams(
-          files: [XFile(filePath)],
+          files: [
+            XFile.fromData(
+              imageBytes,
+              mimeType: 'image/png',
+              name: 'prediction_result.png',
+            ),
+          ],
           text: '🏆 Live Prediction Arena — Check out my results! #LivePredictionArena',
         ),
       );

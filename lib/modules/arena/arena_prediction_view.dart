@@ -102,8 +102,13 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                   // Top bar
                   _buildTopBar(),
                   const SizedBox(height: 20),
-                  // Countdown timer
-                  Obx(() => CountdownTimerWidget(seconds: controller.countdownSeconds.value)),
+                  // Countdown timer (or catch-up banner once it expires)
+                  Obx(() {
+                    if (controller.inCatchUp.value && controller.activeRound.value != null) {
+                      return _buildCatchUpBanner();
+                    }
+                    return CountdownTimerWidget(seconds: controller.countdownSeconds.value);
+                  }),
                   const SizedBox(height: 20),
                   // Question + options
                   Expanded(child: _buildQuestionCard()),
@@ -153,6 +158,31 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
               Get.back();
             },
             child: const Text('Leave', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCatchUpBanner() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFB300).withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+      ),
+      child: const Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.bolt, size: 18, color: Color(0xFFFFB300)),
+          SizedBox(width: 8),
+          Flexible(
+            child: Text(
+              "Time's up — last chance! Answer now for minimum points.",
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFFFB300)),
+              textAlign: TextAlign.center,
+            ),
           ),
         ],
       ),
