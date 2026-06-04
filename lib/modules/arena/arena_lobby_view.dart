@@ -197,18 +197,19 @@ class _MatchCardState extends State<_MatchCard> {
         child: Container(
           clipBehavior: Clip.antiAlias,
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.cardSurface,
             borderRadius: BorderRadius.circular(14),
-            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 8, offset: const Offset(0, 3))],
+            border: Border.all(color: AppColors.cardBorder, width: 1),
           ),
           child: Stack(
             children: [
               // Background team badges (blended)
               if (widget.match.homeTeamBadge.isNotEmpty)
                 Positioned(
-                  left: -40,
-                  top: 0,
-                  bottom: 0,
+                  left: -100,
+                  top: -10,
+                  bottom: -10,
+                  width: 200,
                   child: Opacity(
                     opacity: 0.06,
                     child: SvgPicture.asset(
@@ -219,9 +220,10 @@ class _MatchCardState extends State<_MatchCard> {
                 ),
               if (widget.match.awayTeamBadge.isNotEmpty)
                 Positioned(
-                  right: -40,
-                  top: 0,
-                  bottom: 0,
+                  right: -100,
+                  top: -10,
+                  bottom: -10,
+                  width: 200,
                   child: Opacity(
                     opacity: 0.06,
                     child: SvgPicture.asset(
@@ -238,7 +240,7 @@ class _MatchCardState extends State<_MatchCard> {
                     // League + date row
                     Row(
                       children: [
-                        Text(widget.match.league, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Colors.grey.shade600)),
+                        Text(widget.match.league, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: AppColors.textSecondary)),
                         const Spacer(),
                         if (widget.match.status == 'live')
                           Container(
@@ -254,7 +256,7 @@ class _MatchCardState extends State<_MatchCard> {
                             ),
                           )
                         else
-                          Text('${widget.match.matchDate} · ${widget.match.matchTime}', style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
+                          Text('${widget.match.matchDate} · ${widget.match.matchTime}', style: const TextStyle(fontSize: 11, color: AppColors.textMuted)),
                       ],
                     ),
                     const SizedBox(height: 14),
@@ -267,22 +269,24 @@ class _MatchCardState extends State<_MatchCard> {
                             children: [
                               _badge(widget.match.homeTeamBadge),
                               const SizedBox(width: 10),
-                              Expanded(child: Text(widget.match.homeTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1A2138)), overflow: TextOverflow.ellipsis)),
+                              Expanded(child: Text(widget.match.homeTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis)),
                             ],
                           ),
                         ),
+                        const SizedBox(width: 12),
                         // VS pill
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                          decoration: BoxDecoration(color: const Color(0xFF1A2138), borderRadius: BorderRadius.circular(8)),
+                          decoration: BoxDecoration(color: AppColors.arenaAccent, borderRadius: BorderRadius.circular(8)),
                           child: Text(widget.match.matchTime, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
                         ),
+                        const SizedBox(width: 12),
                         // Away
                         Expanded(
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
-                              Expanded(child: Text(widget.match.awayTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: Color(0xFF1A2138)), overflow: TextOverflow.ellipsis, textAlign: TextAlign.right)),
+                              Expanded(child: Text(widget.match.awayTeam, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary), overflow: TextOverflow.ellipsis, textAlign: TextAlign.right)),
                               const SizedBox(width: 10),
                               _badge(widget.match.awayTeamBadge),
                             ],
@@ -294,9 +298,9 @@ class _MatchCardState extends State<_MatchCard> {
                     // Bottom info
                     Row(
                       children: [
-                        Icon(Icons.people_outline, size: 15, color: Colors.grey.shade500),
+                        const Icon(Icons.people_outline, size: 15, color: AppColors.textMuted),
                         const SizedBox(width: 4),
-                        Text('${widget.match.roomCount} rooms', style: TextStyle(fontSize: 11, color: Colors.grey.shade600)),
+                        Text('${widget.match.roomCount} rooms', style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
                         const Spacer(),
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
@@ -441,21 +445,34 @@ class _RoomListPage extends StatelessWidget {
     return GestureDetector(
       onTap: () => _showCreateRoomSheet(context),
       child: Container(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: AppColors.cardSurface,
+          gradient: LinearGradient(
+            colors: [AppColors.arenaAccent.withValues(alpha: 0.15), AppColors.cardSurface],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
           borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: AppColors.arenaAccent.withValues(alpha: 0.5)),
+          border: Border.all(color: AppColors.arenaAccent.withValues(alpha: 0.4)),
         ),
-        child: const Row(
+        child: Row(
           children: [
-            Icon(Icons.add_circle_outline, color: AppColors.arenaAccent, size: 22),
-            SizedBox(width: 12),
-            Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Create Room', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-              Text('Start your own squad', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppColors.arenaAccent.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Icon(Icons.add_rounded, color: AppColors.arenaAccent, size: 24),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Create Room', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+              SizedBox(height: 2),
+              Text('Start your own prediction squad', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
             ])),
-            Icon(Icons.arrow_forward_ios, color: AppColors.textMuted, size: 16),
+            const Icon(Icons.arrow_forward_ios_rounded, color: AppColors.arenaAccent, size: 16),
           ],
         ),
       ),
@@ -463,10 +480,57 @@ class _RoomListPage extends StatelessWidget {
   }
 
   void _onRoomTap(BuildContext context, dynamic room) {
-    if (room.isPrivate) {
-      _showPrivateRoomDialog(context, room.roomCode as String);
-    } else {
+    final isAlreadyInThisRoom = room.members.any((m) => m.userId == AuthService.userId);
+
+    // If already in this room, just continue (go to waiting/prediction)
+    if (isAlreadyInThisRoom) {
       controller.joinRoom(room.roomCode as String);
+      return;
+    }
+
+    // Check if user is in a different room for this match
+    final currentRoom = controller.availableRooms.firstWhereOrNull(
+      (r) => r.roomCode != room.roomCode && r.members.any((m) => m.userId == AuthService.userId),
+    );
+
+    if (currentRoom != null) {
+      // User is in another room — warn them
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: AppColors.cardSurface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Switch Room?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+          content: Text(
+            'You are already in "${currentRoom.roomName}". Joining this room will remove you from it and all progress will be lost.',
+            style: const TextStyle(fontSize: 14, color: AppColors.textSecondary),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Stay', style: TextStyle(color: AppColors.arenaAccent, fontWeight: FontWeight.bold)),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.of(ctx).pop();
+                if (room.isPrivate) {
+                  _showPrivateRoomDialog(context, room.roomCode as String);
+                } else {
+                  controller.joinRoom(room.roomCode as String);
+                }
+              },
+              child: const Text('Switch', style: TextStyle(color: AppColors.error)),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // Not in any room — join directly
+      if (room.isPrivate) {
+        _showPrivateRoomDialog(context, room.roomCode as String);
+      } else {
+        controller.joinRoom(room.roomCode as String);
+      }
     }
   }
 
@@ -481,54 +545,98 @@ class _RoomListPage extends StatelessWidget {
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.only(bottom: MediaQuery.of(sheetContext).viewInsets.bottom),
         child: Container(
-          decoration: const BoxDecoration(color: AppColors.cardSurface, borderRadius: BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24))),
+          decoration: BoxDecoration(
+            color: AppColors.cardSurface,
+            borderRadius: const BorderRadius.only(topLeft: Radius.circular(24), topRight: Radius.circular(24)),
+            image: const DecorationImage(
+              image: AssetImage('assets/images/bundesliga_bg.jpg'),
+              fit: BoxFit.cover,
+              opacity: 0.15,
+            ),
+          ),
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Create a Room', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                // Drag handle
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.cardBorder,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
                 const SizedBox(height: 20),
-                const Text('ROOM NAME', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textMuted, letterSpacing: 1)),
-                const SizedBox(height: 6),
+                const Text('Create a Room', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                const SizedBox(height: 4),
+                const Text('Set up your prediction squad', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+                const SizedBox(height: 24),
+                // Room name field (auth style)
                 TextField(
                   controller: nameCtrl,
                   style: const TextStyle(fontSize: 14, color: AppColors.textPrimary),
                   decoration: InputDecoration(
-                    hintText: 'e.g., The Prediction Kings',
-                    hintStyle: TextStyle(fontSize: 13, color: AppColors.textMuted.withValues(alpha: 0.5)),
-                    filled: true, fillColor: AppColors.background,
-                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.cardBorder)),
-                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.cardBorder)),
-                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: AppColors.arenaAccent)),
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    hintText: 'Room Name',
+                    hintStyle: TextStyle(fontSize: 13, color: AppColors.textMuted.withValues(alpha: 0.6)),
+                    prefixIcon: const Icon(Icons.meeting_room_outlined, size: 20, color: AppColors.textMuted),
+                    filled: true,
+                    fillColor: AppColors.background.withValues(alpha: 0.3),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.cardBorder)),
+                    enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.cardBorder)),
+                    focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: AppColors.arenaAccent)),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   ),
                 ),
-                const SizedBox(height: 16),
-                const Text('MAX PLAYERS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textMuted, letterSpacing: 1)),
-                const SizedBox(height: 6),
+                const SizedBox(height: 14),
+                // Max players
                 ValueListenableBuilder<int>(
                   valueListenable: maxPlayersNotifier,
-                  builder: (_, maxPlayers, _) => Row(
-                    children: [
-                      Text('$maxPlayers players', style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
-                      const Spacer(),
-                      IconButton(onPressed: maxPlayers > 2 ? () => maxPlayersNotifier.value-- : null, icon: Icon(Icons.remove_circle_outline, color: maxPlayers > 2 ? AppColors.textSecondary : AppColors.textMuted)),
-                      IconButton(onPressed: maxPlayers < 10 ? () => maxPlayersNotifier.value++ : null, icon: Icon(Icons.add_circle_outline, color: maxPlayers < 10 ? AppColors.arenaAccent : AppColors.textMuted)),
-                    ],
+                  builder: (_, maxPlayers, _) => Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.background.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppColors.cardBorder),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.people_outline, size: 20, color: AppColors.textMuted),
+                        const SizedBox(width: 12),
+                        Text('$maxPlayers players', style: const TextStyle(fontSize: 14, color: AppColors.textPrimary)),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: maxPlayers > 2 ? () => maxPlayersNotifier.value-- : null,
+                          child: Icon(Icons.remove_circle_outline, size: 22, color: maxPlayers > 2 ? AppColors.textSecondary : AppColors.textMuted),
+                        ),
+                        const SizedBox(width: 12),
+                        GestureDetector(
+                          onTap: maxPlayers < 10 ? () => maxPlayersNotifier.value++ : null,
+                          child: Icon(Icons.add_circle_outline, size: 22, color: maxPlayers < 10 ? AppColors.arenaAccent : AppColors.textMuted),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 14),
+                // Private toggle
                 Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: AppColors.background, borderRadius: BorderRadius.circular(12), border: Border.all(color: AppColors.cardBorder)),
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppColors.background.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.cardBorder),
+                  ),
                   child: Row(
                     children: [
-                      const Icon(Icons.lock_outline, color: AppColors.textMuted, size: 18),
-                      const SizedBox(width: 8),
+                      const Icon(Icons.lock_outline, size: 20, color: AppColors.textMuted),
+                      const SizedBox(width: 12),
                       const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        Text('Private Room', style: TextStyle(fontSize: 13, color: AppColors.textPrimary)),
+                        Text('Private Room', style: TextStyle(fontSize: 14, color: AppColors.textPrimary)),
                         Text('Requires code to join', style: TextStyle(fontSize: 11, color: AppColors.textMuted)),
                       ])),
                       Obx(() => Switch(value: controller.isPrivateToggle.value, onChanged: (v) => controller.isPrivateToggle.value = v, activeColor: AppColors.arenaAccent)),
@@ -536,10 +644,21 @@ class _RoomListPage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 20),
-                GestureDetector(
-                  onTap: () {
+                // Error
+                Obx(() => controller.errorMessage.value.isNotEmpty
+                    ? Padding(
+                        padding: const EdgeInsets.only(bottom: 12),
+                        child: Text(controller.errorMessage.value, style: const TextStyle(fontSize: 12, color: AppColors.error)),
+                      )
+                    : const SizedBox.shrink()),
+                // Create button (auth style)
+                Obx(() => GestureDetector(
+                  onTap: controller.isCreatingRoom.value ? null : () {
                     final name = nameCtrl.text.trim();
-                    if (name.isEmpty) return;
+                    if (name.isEmpty) {
+                      controller.errorMessage.value = 'Please enter a room name';
+                      return;
+                    }
                     final exists = controller.availableRooms.any((r) => r.roomName.toLowerCase() == name.toLowerCase());
                     if (exists) {
                       controller.errorMessage.value = 'Room name already taken';
@@ -551,9 +670,13 @@ class _RoomListPage extends StatelessWidget {
                   child: Container(
                     height: 52,
                     decoration: BoxDecoration(borderRadius: BorderRadius.circular(12), color: AppColors.arenaAccent),
-                    child: const Center(child: Text('CREATE ROOM', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1))),
+                    child: Center(
+                      child: controller.isCreatingRoom.value
+                          ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Text('CREATE ROOM', style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 1)),
+                    ),
                   ),
-                ),
+                )),
                 const SizedBox(height: 16),
               ],
             ),

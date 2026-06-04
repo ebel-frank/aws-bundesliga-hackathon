@@ -20,6 +20,7 @@ class ArenaWaitingView extends GetView<ArenaController> {
     });
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: AppColors.background,
       body: SafeArea(
         child: Padding(

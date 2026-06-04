@@ -411,7 +411,7 @@ class _UpcomingMatchCard extends StatelessWidget {
           // Background team badges
           if (match.homeTeamBadge.isNotEmpty)
             Positioned(
-              left: -40,
+              left: -100,
               top: 0,
               bottom: 0,
               child: Opacity(
@@ -419,12 +419,13 @@ class _UpcomingMatchCard extends StatelessWidget {
                 child: SvgPicture.asset(
                   match.homeTeamBadge,
                   fit: BoxFit.fitHeight,
+                  width: 200,
                 ),
               ),
             ),
           if (match.awayTeamBadge.isNotEmpty)
             Positioned(
-              right: -40,
+              right: -100,
               top: 0,
               bottom: 0,
               child: Opacity(
@@ -432,6 +433,7 @@ class _UpcomingMatchCard extends StatelessWidget {
                 child: SvgPicture.asset(
                   match.awayTeamBadge,
                   fit: BoxFit.fitHeight,
+                  width: 200,
                 ),
               ),
             ),

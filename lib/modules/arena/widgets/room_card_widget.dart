@@ -39,15 +39,9 @@ class _RoomCardWidgetState extends State<RoomCardWidget> {
         child: Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: AppColors.cardSurface,
             borderRadius: BorderRadius.circular(14),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.1),
-                blurRadius: 6,
-                offset: const Offset(0, 2),
-              ),
-            ],
+            border: Border.all(color: AppColors.cardBorder),
           ),
           child: Row(
             children: [
@@ -64,28 +58,28 @@ class _RoomCardWidgetState extends State<RoomCardWidget> {
                       style: const TextStyle(
                         fontSize: 15,
                         fontWeight: FontWeight.bold,
-                        color: Color(0xFF1A2138),
+                        color: AppColors.textPrimary,
                       ),
                     ),
                     const SizedBox(height: 4),
                     // Host + player count
                     Row(
                       children: [
-                        Icon(Icons.person_outline, size: 14, color: Colors.grey.shade500),
+                        const Icon(Icons.person_outline, size: 14, color: AppColors.textMuted),
                         const SizedBox(width: 4),
                         Text(
                           widget.room.hostDisplayName,
-                          style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+                          style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
                         ),
                         const SizedBox(width: 12),
-                        Icon(Icons.people_outline, size: 14, color: Colors.grey.shade500),
+                        const Icon(Icons.people_outline, size: 14, color: AppColors.textMuted),
                         const SizedBox(width: 4),
                         Text(
                           '${widget.room.members.length}/${widget.room.maxPlayers}',
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w500,
-                            color: widget.room.isFull ? AppColors.error : Colors.grey.shade600,
+                            color: widget.room.isFull ? AppColors.error : AppColors.textSecondary,
                           ),
                         ),
                       ],
@@ -116,12 +110,10 @@ class _RoomCardWidgetState extends State<RoomCardWidget> {
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(8),
-                    color: widget.isJoined
-                        ? Colors.grey.shade400
-                        : AppColors.arenaAccent,
+                    color: AppColors.arenaAccent,
                   ),
                   child: Text(
-                    widget.isJoined ? 'JOINED' : 'JOIN',
+                    widget.isJoined ? 'CONTINUE' : 'JOIN',
                     style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white, letterSpacing: 0.5),
                   ),
                 ),

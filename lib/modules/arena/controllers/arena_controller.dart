@@ -78,6 +78,9 @@ class ArenaController extends GetxController {
   /// Stores the user's picks: questionId → selected option
   final Map<String, String> _userPicks = {};
 
+  /// Public access to user picks for UI display.
+  Map<String, String> get userPicks => _userPicks;
+
   /// Questions whose live timer expired before the user answered. They remain
   /// answerable (for minimum/catch-up points) from the "Missed Questions"
   /// section until the server resolves them.
@@ -139,6 +142,18 @@ class ArenaController extends GetxController {
       }
     } finally {
       isLoadingMatches.value = false;
+    }
+    // Fetch room counts for each match in background
+    _updateRoomCounts();
+  }
+
+  /// Updates room counts for all loaded matches.
+  Future<void> _updateRoomCounts() async {
+    for (int i = 0; i < availableMatches.length; i++) {
+      try {
+        final rooms = await ApiService.getRooms(availableMatches[i].matchId);
+        availableMatches[i] = availableMatches[i].copyWith(roomCount: rooms.length);
+      } catch (_) {}
     }
   }
 
