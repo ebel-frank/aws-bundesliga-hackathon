@@ -157,6 +157,31 @@ export const message = async (event) => {
   const body = JSON.parse(event.body || '{}');
   const { action, roomCode, data } = body;
 
+  const domain = event.requestContext.domainName;
+  const stage = event.requestContext.stage;
+  const apiClient = new ApiGatewayManagementApiClient({
+    endpoint: `https://${domain}/${stage}`,
+  });
+
+  // Heartbeat: refresh the connection's TTL and reply to the sender only.
+  // Never broadcast pings. This keeps the connection alive past the idle timeout.
+  if (action === 'ping') {
+    try {
+      const ttl = Math.floor(Date.now() / 1000) + 3600;
+      await ddb.send(new PutCommand({
+        TableName: CONNECTIONS_TABLE,
+        Item: { connectionId, roomCode: roomCode || '', userId: data?.userId || '', ttl },
+      }));
+    } catch (_) {}
+    try {
+      await apiClient.send(new PostToConnectionCommand({
+        ConnectionId: connectionId,
+        Data: Buffer.from(JSON.stringify({ action: 'pong' })),
+      }));
+    } catch (_) {}
+    return { statusCode: 200, body: 'pong' };
+  }
+
   // Persist prediction picks so the server can score them authoritatively.
   if (action === 'submit_pick') {
     await persistPick(data);
@@ -175,11 +200,6 @@ export const message = async (event) => {
   }));
 
   const connections = result.Items || [];
-  const domain = event.requestContext.domainName;
-  const stage = event.requestContext.stage;
-  const apiClient = new ApiGatewayManagementApiClient({
-    endpoint: `https://${domain}/${stage}`,
-  });
 
   // Broadcast to all connections in the room (except sender for some actions)
   const message = JSON.stringify({ action, data, senderId: connectionId });

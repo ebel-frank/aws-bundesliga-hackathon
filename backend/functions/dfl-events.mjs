@@ -101,8 +101,32 @@ export const processEvents = async (event) => {
     }
 
     // 5. Stream events with delay — re-fetch connections each time for reconnects
+    let emptyRoomStreak = 0; // consecutive events with zero connections
+    const EMPTY_ROOM_LIMIT = 5; // stop after this many consecutive empty checks (grace for reconnects)
     for (let i = 0; i < streamEvents.length; i++) {
       const dflEvent = streamEvents[i];
+
+      // Re-fetch connections each event so reconnected clients are included
+      const allConnections = await getAllConnections(targetRoomCode, matchId, roomCode);
+
+      // If everyone has left the room, stop streaming (with a small grace period
+      // so a brief reconnect gap doesn't kill an active match).
+      if (allConnections.length === 0) {
+        emptyRoomStreak++;
+        console.log(`No connections in room ${targetRoomCode} (${emptyRoomStreak}/${EMPTY_ROOM_LIMIT})`);
+        if (emptyRoomStreak >= EMPTY_ROOM_LIMIT) {
+          console.log(`Room ${targetRoomCode} empty for ${EMPTY_ROOM_LIMIT} checks — stopping stream.`);
+          return {
+            statusCode: 200,
+            body: JSON.stringify({ message: 'Stream stopped — room empty', eventsProcessed: i }),
+          };
+        }
+        // Wait a beat and retry without advancing/broadcasting.
+        await sleep(delayMs > 0 ? delayMs : 1000);
+        i--; // retry the same event index after the wait
+        continue;
+      }
+      emptyRoomStreak = 0;
 
       // Invoke Question Trigger Lambda (async — doesn't block streaming)
       if (QUESTION_TRIGGER_FUNCTION) {
@@ -132,8 +156,6 @@ export const processEvents = async (event) => {
         },
       };
 
-      // Re-fetch connections each event so reconnected clients are included
-      const allConnections = await getAllConnections(targetRoomCode, matchId, roomCode);
       await broadcastToConnections(allConnections, message);
 
       // If this is the FinalWhistle (second half), trigger question resolution
