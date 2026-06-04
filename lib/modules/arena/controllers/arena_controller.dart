@@ -79,6 +79,9 @@ class ArenaController extends GetxController {
   /// Stores the user's picks: questionId → selected option
   final Map<String, String> _userPicks = {};
 
+  /// Public access to user picks for UI display.
+  Map<String, String> get userPicks => _userPicks;
+
   // ── Active prediction round ───────────────────────────────────
   final Rx<PredictionRoundModel?> activeRound = Rx<PredictionRoundModel?>(null);
   final RxList<PlayerPickModel> roundPicks = <PlayerPickModel>[].obs;

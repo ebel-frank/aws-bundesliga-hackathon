@@ -238,10 +238,202 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                 ),
               ),
             ),
+            const SizedBox(width: 8),
+            // QA history icon
+            GestureDetector(
+              onTap: () => _showQAHistory(context),
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: AppColors.arenaAccent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.question_answer_outlined, size: 18, color: AppColors.arenaAccent),
+              ),
+            ),
           ],
         ),
       );
     });
+  }
+
+  void _showQAHistory(BuildContext context) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'QA History',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slideAnimation = Tween<Offset>(
+          begin: const Offset(1, 0),
+          end: Offset.zero,
+        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut));
+
+        return SlideTransition(
+          position: slideAnimation,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.8,
+                height: double.infinity,
+                decoration: const BoxDecoration(
+                  color: AppColors.cardSurface,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    bottomLeft: Radius.circular(20),
+                  ),
+                ),
+                child: SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header
+                      Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.question_answer_outlined, color: AppColors.arenaAccent, size: 22),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'Your Answers',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.of(context).pop(),
+                              child: const Icon(Icons.close, color: AppColors.textMuted, size: 22),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(color: AppColors.cardBorder, height: 1),
+                      // Questions list
+                      Expanded(
+                        child: Obx(() {
+                          final rounds = controller.rounds;
+                          if (rounds.isEmpty) {
+                            return const Center(
+                              child: Text('No questions yet', style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
+                            );
+                          }
+                          return ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: rounds.length,
+                            separatorBuilder: (_, __) => const Divider(color: AppColors.cardBorder, height: 24),
+                            itemBuilder: (_, index) {
+                              final round = rounds[index];
+                              final userPick = controller.userPicks[round.roundId];
+                              final isAnswered = userPick != null;
+                              // Status: awaiting (deferred), correct, wrong
+                              final correctAnswer = round.correctAnswer;
+                              final isResolved = correctAnswer.isNotEmpty;
+                              final isCorrect = isResolved && userPick == correctAnswer;
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Question number + status badge
+                                  Row(
+                                    children: [
+                                      Text(
+                                        'Q${index + 1}',
+                                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.arenaAccent),
+                                      ),
+                                      const Spacer(),
+                                      _statusBadge(isAnswered, isResolved, isCorrect),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  // Question text
+                                  Text(
+                                    round.questionText,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 10),
+                                  // Options
+                                  ...round.options.map((option) {
+                                    final isSelected = option == userPick;
+                                    final isCorrectOption = isResolved && option == correctAnswer;
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                                            size: 16,
+                                            color: isSelected
+                                                ? (isResolved ? (isCorrect ? AppColors.neonGreen : AppColors.error) : AppColors.arenaAccent)
+                                                : (isCorrectOption ? AppColors.neonGreen : AppColors.textMuted),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              option,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: isSelected ? AppColors.textPrimary : AppColors.textSecondary,
+                                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                              ),
+                                            ),
+                                          ),
+                                          if (isCorrectOption)
+                                            const Icon(Icons.check_circle, size: 14, color: AppColors.neonGreen),
+                                        ],
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              );
+                            },
+                          );
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _statusBadge(bool isAnswered, bool isResolved, bool isCorrect) {
+    if (!isAnswered) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.textMuted.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6)),
+        child: const Text('SKIPPED', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.textMuted)),
+      );
+    }
+    if (!isResolved) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.arenaAccent.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+        child: const Text('AWAITING', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.arenaAccent)),
+      );
+    }
+    if (isCorrect) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.neonGreen.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+        child: const Text('CORRECT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.neonGreen)),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+      child: const Text('WRONG', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.error)),
+    );
   }
 
   Widget _buildQuestionCard() {
