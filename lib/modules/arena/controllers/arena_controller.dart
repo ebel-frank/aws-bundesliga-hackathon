@@ -90,6 +90,10 @@ class ArenaController extends GetxController {
   /// Question ids already resolved by the server (so we never re-surface them).
   final Set<String> _resolvedQuestionIds = {};
 
+  /// Resolution status per question for QA history: questionId → 'correct' | 'wrong'.
+  /// Reactive so the QA history updates live as the server resolves questions.
+  final RxMap<String, String> questionResults = <String, String>{}.obs;
+
   // ── Active prediction round ───────────────────────────────────
   final Rx<PredictionRoundModel?> activeRound = Rx<PredictionRoundModel?>(null);
   final RxList<PlayerPickModel> roundPicks = <PlayerPickModel>[].obs;
@@ -283,8 +287,9 @@ class ArenaController extends GetxController {
       _applyServerLeaderboard(serverLb);
     }
 
-    // 2. Surface the most recent result to the player as a round-result overlay.
-    //    Find a result the local user actually answered, preferring the last one.
+    // 2. Record resolution status for ALL results (QA history + correctAnswer),
+    //    then surface the most recent answered result as a round-result overlay.
+    bool overlayShown = false;
     for (final result in results.reversed) {
       final questionId = result['questionId'] as String? ?? '';
       if (questionId.isEmpty) continue;
@@ -293,20 +298,38 @@ class ArenaController extends GetxController {
       _resolvedQuestionIds.add(questionId);
       missedQuestions.removeWhere((q) => q.roundId == questionId);
 
-      final myPickForQ = _userPicks[questionId];
-      if (myPickForQ == null) continue;
-
       final scores = result['scores'] as Map<String, dynamic>?;
       final myPoints = (scores?[_currentUserId] as num?)?.toInt() ?? 0;
+      final myPickForQ = _userPicks[questionId];
       // Server is authoritative: any points means the pick was correct.
       final correct = myPoints > 0;
 
-      wasCorrect.value = correct;
-      xpEarnedThisRound.value = myPoints;
-      // Fast answers earn well above the catch-up minimum (100); flag a speed badge.
-      speedBonusEarned.value = correct && myPoints >= 600;
-      isDeferred.value = false;
-      newStreak.value = correct ? newStreak.value + 1 : 0;
+      // Record resolution status for QA history (live update) — only if answered
+      if (myPickForQ != null) {
+        questionResults[questionId] = correct ? 'correct' : 'wrong';
+      }
+
+      // Update the round's correctAnswer for QA history display
+      final correctAnswer = result['correctAnswer'] as String? ?? '';
+      final roundIdx = rounds.indexWhere((r) => r.roundId == questionId);
+      if (roundIdx != -1) {
+        String resolvedAnswer = correctAnswer;
+        // If server didn't send correctAnswer but user scored points, their pick was correct
+        if (resolvedAnswer.isEmpty && myPoints > 0 && myPickForQ != null) {
+          resolvedAnswer = myPickForQ;
+        }
+        if (resolvedAnswer.isNotEmpty) {
+          rounds[roundIdx] = PredictionRoundModel(
+            roundId: rounds[roundIdx].roundId,
+            roundNumber: rounds[roundIdx].roundNumber,
+            questionText: rounds[roundIdx].questionText,
+            options: rounds[roundIdx].options,
+            correctAnswer: resolvedAnswer,
+            category: rounds[roundIdx].category,
+            timeLimitSeconds: rounds[roundIdx].timeLimitSeconds,
+          );
+        }
+      }
 
       // If this resolves the question currently on screen, clear it.
       if (activeRound.value?.roundId == questionId) {
@@ -315,17 +338,27 @@ class ArenaController extends GetxController {
         activeRound.value = null;
       }
 
-      // Don't cover a live question the player is mid-answering with the overlay.
-      final hasLiveQuestion = activeRound.value != null;
-      if (currentScreen.value != ArenaScreen.end && !hasLiveQuestion) {
-        currentScreen.value = ArenaScreen.roundResult;
-        Future.delayed(const Duration(seconds: 3), () {
-          if (currentScreen.value == ArenaScreen.roundResult) {
-            currentScreen.value = ArenaScreen.prediction;
-          }
-        });
+      // Show the overlay only once, for the most recent question the user answered.
+      if (!overlayShown && myPickForQ != null) {
+        overlayShown = true;
+        wasCorrect.value = correct;
+        xpEarnedThisRound.value = myPoints;
+        // Fast answers earn well above the catch-up minimum (100); flag a speed badge.
+        speedBonusEarned.value = correct && myPoints >= 600;
+        isDeferred.value = false;
+        newStreak.value = correct ? newStreak.value + 1 : 0;
+
+        // Don't cover a live question the player is mid-answering with the overlay.
+        final hasLiveQuestion = activeRound.value != null;
+        if (currentScreen.value != ArenaScreen.end && !hasLiveQuestion) {
+          currentScreen.value = ArenaScreen.roundResult;
+          Future.delayed(const Duration(seconds: 3), () {
+            if (currentScreen.value == ArenaScreen.roundResult) {
+              currentScreen.value = ArenaScreen.prediction;
+            }
+          });
+        }
       }
-      break;
     }
   }
 
@@ -339,6 +372,16 @@ class ArenaController extends GetxController {
     }).toList();
     lb.sort((a, b) => b.totalXP.compareTo(a.totalXP));
     leaderboard.assignAll(lb);
+
+    // Also update the squad members so the in-game top bar reflects scores.
+    final current = squad.value;
+    if (current != null) {
+      final updatedMembers = current.members.map((m) {
+        final xp = (serverLb[m.userId] as num?)?.toInt() ?? m.totalXP;
+        return m.copyWith(totalXP: xp);
+      }).toList();
+      squad.value = current.copyWith(members: updatedMembers);
+    }
   }
 
   /// Handle match ended signal (stream finished).
@@ -610,6 +653,7 @@ class ArenaController extends GetxController {
     _userPicks.clear();
     missedQuestions.clear();
     _resolvedQuestionIds.clear();
+    questionResults.clear();
     chatMessages.clear();
     floatingReactions.clear();
 

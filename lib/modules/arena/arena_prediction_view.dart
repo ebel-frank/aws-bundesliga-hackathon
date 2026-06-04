@@ -388,6 +388,8 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                       Expanded(
                         child: Obx(() {
                           final rounds = controller.rounds;
+                          // Touch questionResults so this rebuilds when statuses change
+                          final _ = controller.questionResults.length;
                           if (rounds.isEmpty) {
                             return const Center(
                               child: Text('No questions yet', style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
@@ -401,10 +403,15 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                               final round = rounds[index];
                               final userPick = controller.userPicks[round.roundId];
                               final isAnswered = userPick != null;
-                              // Status: awaiting (deferred), correct, wrong
+                              // Resolution status from server (points-based, authoritative)
+                              final resultStatus = controller.questionResults[round.roundId];
                               final correctAnswer = round.correctAnswer;
-                              final isResolved = correctAnswer.isNotEmpty;
-                              final isCorrect = isResolved && userPick == correctAnswer;
+                              final isResolved = resultStatus != null || correctAnswer.isNotEmpty;
+                              // Trust the server's status first; only fall back to
+                              // answer-matching when no status was recorded.
+                              final bool isCorrect = resultStatus != null
+                                  ? resultStatus == 'correct'
+                                  : (correctAnswer.isNotEmpty && userPick == correctAnswer);
 
                               return Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,

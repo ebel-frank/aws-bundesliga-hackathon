@@ -75,4 +75,28 @@ class SquadModel {
     'status': status,
     'totalRounds': totalRounds,
   };
+
+  SquadModel copyWith({
+    String? roomName,
+    List<PlayerModel>? members,
+    String? status,
+    int? totalRounds,
+  }) {
+    return SquadModel(
+      roomCode: roomCode,
+      roomName: roomName ?? this.roomName,
+      hostUserId: hostUserId,
+      matchTitle: matchTitle,
+      homeTeam: homeTeam,
+      awayTeam: awayTeam,
+      homeTeamBadge: homeTeamBadge,
+      awayTeamBadge: awayTeamBadge,
+      matchTime: matchTime,
+      isPrivate: isPrivate,
+      members: members ?? this.members,
+      maxPlayers: maxPlayers,
+      status: status ?? this.status,
+      totalRounds: totalRounds ?? this.totalRounds,
+    );
+  }
 }

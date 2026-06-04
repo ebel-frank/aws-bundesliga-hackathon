@@ -122,54 +122,81 @@ class _MatchListPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Obx(() {
-      if (controller.isLoadingMatches.value) {
-        return const Center(child: CircularProgressIndicator(color: AppColors.arenaAccent));
-      }
-      if (controller.availableMatches.isEmpty) {
-        return const Center(child: Text('No matches available', style: TextStyle(color: AppColors.textMuted)));
-      }
+    return RefreshIndicator(
+      color: AppColors.arenaAccent,
+      backgroundColor: AppColors.cardSurface,
+      onRefresh: () => controller.fetchMatches(),
+      child: Obx(() {
+        // Header that's always present
+        const header = Padding(
+          padding: EdgeInsets.only(top: 24, bottom: 20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Select a Match', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+              SizedBox(height: 4),
+              Text('Choose a match to predict on', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+            ],
+          ),
+        );
 
-      // Sort: live first, then Today, Tomorrow, then others
-      final sorted = List<MatchModel>.from(controller.availableMatches);
-      sorted.sort((a, b) {
-        const priority = {'live': 0, 'upcoming': 1, 'finished': 2};
-        final statusCompare = (priority[a.status] ?? 1).compareTo(priority[b.status] ?? 1);
-        if (statusCompare != 0) return statusCompare;
-        const datePriority = {'Today': 0, 'Tomorrow': 1};
-        final aDate = datePriority[a.matchDate] ?? 2;
-        final bDate = datePriority[b.matchDate] ?? 2;
-        return aDate.compareTo(bDate);
-      });
+        if (controller.isLoadingMatches.value) {
+          return ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: const [
+              header,
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: 60),
+                child: Center(child: CircularProgressIndicator(color: AppColors.arenaAccent)),
+              ),
+            ],
+          );
+        }
+        if (controller.availableMatches.isEmpty) {
+          return ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            physics: const AlwaysScrollableScrollPhysics(),
+            children: const [
+              header,
+              Padding(
+                padding: EdgeInsets.symmetric(vertical: 60),
+                child: Center(child: Text('No matches available', style: TextStyle(color: AppColors.textMuted))),
+              ),
+            ],
+          );
+        }
 
-      return ListView.builder(
-        padding: const EdgeInsets.symmetric(horizontal: 20),
-        itemCount: sorted.length + 1, // +1 for header
-        itemBuilder: (_, i) {
-          if (i == 0) {
-            return const Padding(
-              padding: EdgeInsets.only(top: 24, bottom: 20),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text('Select a Match', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                  SizedBox(height: 4),
-                  Text('Choose a match to predict on', style: TextStyle(fontSize: 13, color: AppColors.textSecondary)),
-                ],
+        // Sort: live first, then Today, Tomorrow, then others
+        final sorted = List<MatchModel>.from(controller.availableMatches);
+        sorted.sort((a, b) {
+          const priority = {'live': 0, 'upcoming': 1, 'finished': 2};
+          final statusCompare = (priority[a.status] ?? 1).compareTo(priority[b.status] ?? 1);
+          if (statusCompare != 0) return statusCompare;
+          const datePriority = {'Today': 0, 'Tomorrow': 1};
+          final aDate = datePriority[a.matchDate] ?? 2;
+          final bDate = datePriority[b.matchDate] ?? 2;
+          return aDate.compareTo(bDate);
+        });
+
+        return ListView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 20),
+          physics: const AlwaysScrollableScrollPhysics(),
+          itemCount: sorted.length + 1, // +1 for header
+          itemBuilder: (_, i) {
+            if (i == 0) return header;
+            final match = sorted[i - 1];
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _MatchCard(
+                match: match,
+                onTap: () => controller.selectMatch(match),
               ),
             );
-          }
-          final match = sorted[i - 1];
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 12),
-            child: _MatchCard(
-              match: match,
-              onTap: () => controller.selectMatch(match),
-            ),
-          );
-        },
-      );
-    });
+          },
+        );
+      }),
+    );
   }
 }
 
@@ -345,10 +372,13 @@ class _RoomListPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    return RefreshIndicator(
+      color: AppColors.arenaAccent,
+      backgroundColor: AppColors.cardSurface,
+      onRefresh: () => controller.fetchAvailableRooms(),
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
+        physics: const AlwaysScrollableScrollPhysics(),
         children: [
           const SizedBox(height: 24),
           // Selected match header
@@ -397,13 +427,17 @@ class _RoomListPage extends StatelessWidget {
           _buildCreateRoomCard(context),
           const SizedBox(height: 16),
           // Room list
-          Expanded(
-            child: Obx(() {
-              if (controller.isLoadingRooms.value) {
-                return const Center(child: CircularProgressIndicator(color: AppColors.arenaAccent));
-              }
-              if (controller.availableRooms.isEmpty) {
-                return Center(
+          Obx(() {
+            if (controller.isLoadingRooms.value) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 60),
+                child: Center(child: CircularProgressIndicator(color: AppColors.arenaAccent)),
+              );
+            }
+            if (controller.availableRooms.isEmpty) {
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 60),
+                child: Center(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -412,30 +446,36 @@ class _RoomListPage extends StatelessWidget {
                       const Text('No rooms yet. Be the first!', style: TextStyle(fontSize: 14, color: AppColors.textMuted)),
                     ],
                   ),
-                );
-              }
-              final rooms = controller.filteredRooms;
-              if (rooms.isEmpty) {
-                return const Center(child: Text('No rooms match your search', style: TextStyle(fontSize: 14, color: AppColors.textMuted)));
-              }
-              return ListView.separated(
-                itemCount: rooms.length,
-                separatorBuilder: (_, _) => const SizedBox(height: 12),
-                itemBuilder: (_, i) {
-                  final room = rooms[i];
-                  return RoomCardWidget(
-                    room: room,
-                    isJoined: room.members.any((m) => m.userId == AuthService.userId),
-                    onTap: () => _onRoomTap(context, room),
-                  );
-                },
+                ),
               );
-            }),
-          ),
+            }
+            final rooms = controller.filteredRooms;
+            if (rooms.isEmpty) {
+              return const Padding(
+                padding: EdgeInsets.symmetric(vertical: 60),
+                child: Center(child: Text('No rooms match your search', style: TextStyle(fontSize: 14, color: AppColors.textMuted))),
+              );
+            }
+            return ListView.separated(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: rooms.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 12),
+              itemBuilder: (_, i) {
+                final room = rooms[i];
+                return RoomCardWidget(
+                  room: room,
+                  isJoined: room.members.any((m) => m.userId == AuthService.userId),
+                  onTap: () => _onRoomTap(context, room),
+                );
+              },
+            );
+          }),
           Obx(() {
             if (controller.errorMessage.value.isEmpty) return const SizedBox.shrink();
             return Padding(padding: const EdgeInsets.only(top: 8, bottom: 8), child: Text(controller.errorMessage.value, style: const TextStyle(fontSize: 12, color: AppColors.error)));
           }),
+          const SizedBox(height: 24),
         ],
       ),
     );
