@@ -92,6 +92,14 @@ export const processEvents = async (event) => {
       });
     }
 
+    // 4b. Lead-in pause so players settle into the prediction screen and the
+    //     kick-off questions land a beat after the lobby starts (default 5s).
+    const startDelayMs = event.startDelayMs != null ? event.startDelayMs : 5000;
+    if (startDelayMs > 0) {
+      console.log(`Lead-in delay ${startDelayMs}ms before streaming events`);
+      await sleep(startDelayMs);
+    }
+
     // 5. Stream events with delay — re-fetch connections each time for reconnects
     for (let i = 0; i < streamEvents.length; i++) {
       const dflEvent = streamEvents[i];

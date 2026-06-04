@@ -110,6 +110,8 @@ class ArenaController extends GetxController {
   final RxInt matchCountdownSeconds = 0.obs;
   final RxBool isMatchLive = false.obs;
   Timer? _matchCountdownTimer;
+  // Guards against starting the game twice (host click + its own broadcast echo).
+  bool _gameStarted = false;
 
   // ── Timer ─────────────────────────────────────────────────────
   Timer? _countdownTimer;
@@ -168,7 +170,8 @@ class ArenaController extends GetxController {
           squad.value = SquadModel.fromJson(data['room'] as Map<String, dynamic>);
         }
       } else if (action == 'game_started') {
-        startGame();
+        // Another player (the host) started the game — sync into the match.
+        _beginGame(broadcast: false);
       } else if (action == 'dfl_event') {
         _handleDflWebSocketEvent(msg);
       } else if (action == 'prediction_question') {
@@ -497,6 +500,7 @@ class ArenaController extends GetxController {
       squad.value = createdRoom;
       currentScreen.value = ArenaScreen.waiting;
       arenaPageIndex.value = 2;
+      _gameStarted = false;
       _connectRoomWebSocket(createdRoom.roomCode);
       // If match is already live, skip countdown
       if (selectedMatch.value?.status == 'live') {
@@ -529,6 +533,7 @@ class ArenaController extends GetxController {
       squad.value = joinedRoom;
       currentScreen.value = ArenaScreen.waiting;
       arenaPageIndex.value = 2;
+      _gameStarted = false;
       _connectRoomWebSocket(joinedRoom.roomCode);
       // If match is already live, skip countdown
       if (selectedMatch.value?.status == 'live') {
@@ -545,10 +550,27 @@ class ArenaController extends GetxController {
     }
   }
 
-  /// Host starts the game. Navigates to prediction screen.
-  /// Questions arrive via WebSocket from the AI pipeline.
+  /// Host starts the game. Broadcasts game_started to the room (which triggers
+  /// the backend to auto-stream the real match data), then navigates everyone
+  /// to the prediction screen. Idempotent via [_gameStarted].
   void startGame() async {
     if (!isMatchLive.value) return;
+    _beginGame(broadcast: true);
+  }
+
+  /// Shared start path. [broadcast] true when this client is the initiating host.
+  /// All clients (host + joiners) run the local setup + navigation exactly once.
+  void _beginGame({required bool broadcast}) {
+    if (_gameStarted) return;
+    _gameStarted = true;
+
+    // Host announces the start so the backend auto-streams and peers sync.
+    if (broadcast) {
+      final roomCode = squad.value?.roomCode ?? '';
+      if (roomCode.isNotEmpty) {
+        _roomWs.sendGameStarted(roomCode, matchId: selectedMatch.value?.matchId);
+      }
+    }
 
     // Clear any old rounds
     rounds.clear();
@@ -559,7 +581,8 @@ class ArenaController extends GetxController {
     chatMessages.clear();
     floatingReactions.clear();
 
-    // Navigate to prediction screen — questions will arrive via WebSocket
+    // Navigate to prediction screen — questions will arrive via WebSocket.
+    // The backend waits ~5s, fires the kick-off questions, then streams events.
     currentScreen.value = ArenaScreen.prediction;
     Get.toNamed(AppRoutes.arenaPrediction);
   }

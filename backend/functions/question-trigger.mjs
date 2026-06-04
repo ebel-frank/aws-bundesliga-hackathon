@@ -99,6 +99,12 @@ export const handler = async (event) => {
       return resolveQuestions(event);
     }
 
+    // Route to reset handler if flagged — wipes prior questions + match state so
+    // the same match can be demoed repeatedly with a fresh kick-off sequence.
+    if (event.reset) {
+      return resetMatch(event);
+    }
+
     const { matchId, roomCode, event: dflEvent, matchInfo, playerLookup, teamLookup } = event;
 
     if (!matchId || !dflEvent) {
@@ -572,6 +578,41 @@ function buildContext(matchInfo, playerLookup, teamLookup) {
     playerLookup: playerLookup || mi.playerLookup || {},
     teamLookup: lookup,
   };
+}
+
+/**
+ * Reset all per-match state so a match can be re-demoed cleanly: deletes every
+ * stored question and clears the match-state flags (kickoffFired / kickoffQueue).
+ */
+async function resetMatch(event) {
+  const { matchId } = event;
+  if (!matchId) return { statusCode: 400, body: 'matchId required' };
+  try {
+    // 1. Delete all questions for this match.
+    const qs = await ddb.send(new QueryCommand({
+      TableName: QUESTIONS_TABLE,
+      KeyConditionExpression: 'matchId = :m',
+      ExpressionAttributeValues: { ':m': matchId },
+    }));
+    for (const q of qs.Items || []) {
+      await ddb.send(new DeleteCommand({
+        TableName: QUESTIONS_TABLE,
+        Key: { matchId, questionId: q.questionId },
+      }));
+    }
+
+    // 2. Clear match-state flags.
+    await ddb.send(new DeleteCommand({
+      TableName: MATCH_STATE_TABLE,
+      Key: { matchId },
+    }));
+
+    console.log(`Reset match ${matchId}: removed ${qs.Items?.length || 0} questions`);
+    return { statusCode: 200, body: JSON.stringify({ reset: true, removed: qs.Items?.length || 0 }) };
+  } catch (err) {
+    console.error('resetMatch error:', err.message);
+    return { statusCode: 500, body: err.message };
+  }
 }
 
 async function getMatchState(matchId) {

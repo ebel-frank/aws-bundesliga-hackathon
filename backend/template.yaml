@@ -11,6 +11,18 @@ Parameters:
     Type: String
     Default: eu-central-1
     Description: Region of the DFL data bucket (read cross-region by the Lambda).
+  DflEventsKey:
+    Type: String
+    Default: "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/Events_Anonym.xml"
+    Description: S3 key of the DFL match events XML (the single real anonymised fixture).
+  DflMatchInfoKey:
+    Type: String
+    Default: "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/MatchInformations_Anonym.xml"
+    Description: S3 key of the DFL MatchInformations XML.
+  StreamDelayMs:
+    Type: String
+    Default: "3000"
+    Description: Delay (ms) between streamed DFL events during a match.
 
 Globals:
   Function:
@@ -413,6 +425,12 @@ Resources:
       Environment:
         Variables:
           QUESTIONS_TABLE: !Ref QuestionsTable
+          DFL_EVENTS_FUNCTION: !Ref DflEventsFunction
+          QUESTION_TRIGGER_FUNCTION: !Ref QuestionTriggerFunction
+          DFL_DATA_BUCKET: !Ref DflDataBucketName
+          DFL_EVENTS_KEY: !Ref DflEventsKey
+          DFL_MATCH_INFO_KEY: !Ref DflMatchInfoKey
+          STREAM_DELAY_MS: !Ref StreamDelayMs
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
@@ -424,6 +442,12 @@ Resources:
             - Effect: Allow
               Action: execute-api:ManageConnections
               Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt DflEventsFunction.Arn
+                - !GetAtt QuestionTriggerFunction.Arn
 
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route

@@ -6,7 +6,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 /// WebSocket service for real-time squad communication.
 /// Replace [wsUrl] with your deployed WebSocket API Gateway URL after running `sam deploy`.
 class WebSocketService {
-  static const String wsUrl = 'wss://n4t5lyhzcd.execute-api.us-east-1.amazonaws.com/prod';
+  static const String wsUrl = 'wss://6a4wu4973a.execute-api.us-east-1.amazonaws.com/prod';
 
   WebSocketChannel? _channel;
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
@@ -66,9 +66,12 @@ class WebSocketService {
     });
   }
 
-  /// Broadcast that the game has started.
-  void sendGameStarted(String roomCode) {
-    send(action: 'game_started', roomCode: roomCode);
+  /// Broadcast that the game has started. Carries the matchId so the backend
+  /// can auto-stream the real match data for that fixture.
+  void sendGameStarted(String roomCode, {String? matchId}) {
+    send(action: 'game_started', roomCode: roomCode, data: {
+      if (matchId != null) 'matchId': matchId,
+    });
   }
 
   /// Broadcast that a player has locked in their pick.
