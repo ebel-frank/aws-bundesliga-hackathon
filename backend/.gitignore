@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+
+# SAM build artifacts
+.aws-sam/
+
+# Local env
+.env
+samconfig.local.toml

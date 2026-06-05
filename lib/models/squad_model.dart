@@ -15,6 +15,7 @@ class SquadModel {
   final int maxPlayers; // max players allowed (2-10)
   final String status; // 'waiting' | 'playing' | 'finished'
   final int totalRounds;
+  final bool demoMode; // demo: 5-question limit, tighter spacing
 
   const SquadModel({
     required this.roomCode,
@@ -31,6 +32,7 @@ class SquadModel {
     this.maxPlayers = 6,
     required this.status,
     required this.totalRounds,
+    this.demoMode = false,
   });
 
   String get hostDisplayName =>
@@ -56,6 +58,7 @@ class SquadModel {
       maxPlayers: json['maxPlayers'] as int? ?? 6,
       status: json['status'] as String? ?? 'waiting',
       totalRounds: json['totalRounds'] as int? ?? 5,
+      demoMode: json['demoMode'] as bool? ?? false,
     );
   }
 
@@ -74,5 +77,32 @@ class SquadModel {
     'maxPlayers': maxPlayers,
     'status': status,
     'totalRounds': totalRounds,
+    'demoMode': demoMode,
   };
+
+  SquadModel copyWith({
+    String? roomName,
+    List<PlayerModel>? members,
+    String? status,
+    int? totalRounds,
+    bool? demoMode,
+  }) {
+    return SquadModel(
+      roomCode: roomCode,
+      roomName: roomName ?? this.roomName,
+      hostUserId: hostUserId,
+      matchTitle: matchTitle,
+      homeTeam: homeTeam,
+      awayTeam: awayTeam,
+      homeTeamBadge: homeTeamBadge,
+      awayTeamBadge: awayTeamBadge,
+      matchTime: matchTime,
+      isPrivate: isPrivate,
+      members: members ?? this.members,
+      maxPlayers: maxPlayers,
+      status: status ?? this.status,
+      totalRounds: totalRounds ?? this.totalRounds,
+      demoMode: demoMode ?? this.demoMode,
+    );
+  }
 }

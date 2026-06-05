@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:get/get.dart';
 
 import '../../app/theme/app_colors.dart';
+import '../../models/prediction_round_model.dart';
 import 'controllers/arena_controller.dart';
 import 'widgets/countdown_timer_widget.dart';
 import 'widgets/live_chat_widget.dart';
@@ -101,9 +102,15 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                   const SizedBox(height: 12),
                   // Top bar
                   _buildTopBar(),
-                  const SizedBox(height: 20),
-                  // Countdown timer
-                  Obx(() => CountdownTimerWidget(seconds: controller.countdownSeconds.value)),
+                  const SizedBox(height: 12),
+                  // Missed questions banner (tap to answer for catch-up points)
+                  _buildMissedQuestionsBar(context),
+                  const SizedBox(height: 8),
+                  // Countdown timer — only show when a question is active
+                  Obx(() {
+                    if (controller.activeRound.value == null) return const SizedBox.shrink();
+                    return CountdownTimerWidget(seconds: controller.countdownSeconds.value);
+                  }),
                   const SizedBox(height: 20),
                   // Question + options
                   Expanded(child: _buildQuestionCard()),
@@ -159,6 +166,100 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
     );
   }
 
+  /// A tappable banner showing how many questions the player missed. Tapping
+  /// opens a sheet where each missed question can still be answered for
+  /// minimum (catch-up) points, until the server resolves it.
+  Widget _buildMissedQuestionsBar(BuildContext context) {
+    return Obx(() {
+      final count = controller.missedQuestions.length;
+      if (count == 0) return const SizedBox.shrink();
+      return GestureDetector(
+        onTap: () => _showMissedQuestionsSheet(context),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFB300).withValues(alpha: 0.12),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: const Color(0xFFFFB300).withValues(alpha: 0.5)),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.history_toggle_off, size: 18, color: Color(0xFFFFB300)),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '$count missed ${count == 1 ? 'question' : 'questions'} — tap to catch up',
+                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFFFFB300)),
+                ),
+              ),
+              const Icon(Icons.chevron_right, size: 18, color: Color(0xFFFFB300)),
+            ],
+          ),
+        ),
+      );
+    });
+  }
+
+  void _showMissedQuestionsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.cardSurface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * 0.75),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const SizedBox(height: 12),
+              Container(width: 40, height: 4, decoration: BoxDecoration(color: AppColors.cardBorder, borderRadius: BorderRadius.circular(2))),
+              const Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.bolt, size: 20, color: Color(0xFFFFB300)),
+                    SizedBox(width: 8),
+                    Text('Catch up on missed questions', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('Answer now for minimum points before they resolve.', style: TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: Obx(() {
+                  final missed = controller.missedQuestions;
+                  if (missed.isEmpty) {
+                    return const Padding(
+                      padding: EdgeInsets.all(24),
+                      child: Text('All caught up! 🎉', style: TextStyle(fontSize: 14, color: AppColors.textSecondary)),
+                    );
+                  }
+                  return ListView.separated(
+                    shrinkWrap: true,
+                    padding: const EdgeInsets.all(16),
+                    itemCount: missed.length,
+                    separatorBuilder: (_, __) => const Divider(color: AppColors.cardBorder, height: 24),
+                    itemBuilder: (_, i) => _MissedQuestionTile(round: missed[i], controller: controller),
+                  );
+                }),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildTopBar() {
     return Obx(() {
       final members = controller.squad.value?.members ?? [];
@@ -208,10 +309,253 @@ class _ArenaPredictionViewState extends State<ArenaPredictionView> {
                 ),
               ),
             ),
+            const SizedBox(width: 8),
+            // QA history icon
+            GestureDetector(
+              onTap: () => _showQAHistory(context),
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: AppColors.arenaAccent.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Icon(Icons.question_answer_outlined, size: 18, color: AppColors.arenaAccent),
+              ),
+            ),
+            // End Game button — demo mode only, host can end early.
+            if (controller.squad.value?.demoMode ?? false) ...[
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _confirmEndGame(context),
+                child: Container(
+                  width: 32,
+                  height: 32,
+                  decoration: BoxDecoration(
+                    color: AppColors.error.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.stop_circle_outlined, size: 18, color: AppColors.error),
+                ),
+              ),
+            ],
           ],
         ),
       );
     });
+  }
+
+  void _confirmEndGame(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.cardSurface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('End Game?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+        content: const Text(
+          'This will end the game for everyone and show the final results.',
+          style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Cancel', style: TextStyle(color: AppColors.arenaAccent, fontWeight: FontWeight.bold)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(ctx).pop();
+              controller.endGameForAll();
+            },
+            child: const Text('End Game', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showQAHistory(BuildContext context) {
+    showGeneralDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'QA History',
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 250),
+      pageBuilder: (_, __, ___) => const SizedBox.shrink(),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        final slideAnimation = Tween<Offset>(
+          begin: const Offset(1, 0),
+          end: Offset.zero,
+        ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut));
+
+        return SlideTransition(
+          position: slideAnimation,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Material(
+              color: Colors.transparent,
+              child: Container(
+                width: MediaQuery.of(context).size.width * 0.8,
+                height: double.infinity,
+                decoration: const BoxDecoration(
+                  color: AppColors.cardSurface,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    bottomLeft: Radius.circular(20),
+                  ),
+                ),
+                child: SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Header
+                      Padding(
+                        padding: const EdgeInsets.all(20),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.question_answer_outlined, color: AppColors.arenaAccent, size: 22),
+                            const SizedBox(width: 10),
+                            const Expanded(
+                              child: Text(
+                                'Your Answers',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                              ),
+                            ),
+                            GestureDetector(
+                              onTap: () => Navigator.of(context).pop(),
+                              child: const Icon(Icons.close, color: AppColors.textMuted, size: 22),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(color: AppColors.cardBorder, height: 1),
+                      // Questions list
+                      Expanded(
+                        child: Obx(() {
+                          final rounds = controller.rounds;
+                          // Touch questionResults so this rebuilds when statuses change
+                          final _ = controller.questionResults.length;
+                          if (rounds.isEmpty) {
+                            return const Center(
+                              child: Text('No questions yet', style: TextStyle(color: AppColors.textMuted, fontSize: 14)),
+                            );
+                          }
+                          return ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: rounds.length,
+                            separatorBuilder: (_, __) => const Divider(color: AppColors.cardBorder, height: 24),
+                            itemBuilder: (_, index) {
+                              final round = rounds[index];
+                              final userPick = controller.userPicks[round.roundId];
+                              final isAnswered = userPick != null;
+                              // Resolution status from server (points-based, authoritative)
+                              final resultStatus = controller.questionResults[round.roundId];
+                              final correctAnswer = round.correctAnswer;
+                              final isResolved = resultStatus != null || correctAnswer.isNotEmpty;
+                              // Trust the server's status first; only fall back to
+                              // answer-matching when no status was recorded.
+                              final bool isCorrect = resultStatus != null
+                                  ? resultStatus == 'correct'
+                                  : (correctAnswer.isNotEmpty && userPick == correctAnswer);
+
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  // Question number + status badge
+                                  Row(
+                                    children: [
+                                      Text(
+                                        'Q${index + 1}',
+                                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.arenaAccent),
+                                      ),
+                                      const Spacer(),
+                                      _statusBadge(isAnswered, isResolved, isCorrect),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  // Question text
+                                  Text(
+                                    round.questionText,
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 10),
+                                  // Options
+                                  ...round.options.map((option) {
+                                    final isSelected = option == userPick;
+                                    final isCorrectOption = isResolved && option == correctAnswer;
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 4),
+                                      child: Row(
+                                        children: [
+                                          Icon(
+                                            isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                                            size: 16,
+                                            color: isSelected
+                                                ? (isResolved ? (isCorrect ? AppColors.neonGreen : AppColors.error) : AppColors.arenaAccent)
+                                                : (isCorrectOption ? AppColors.neonGreen : AppColors.textMuted),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              option,
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: isSelected ? AppColors.textPrimary : AppColors.textSecondary,
+                                                fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                              ),
+                                            ),
+                                          ),
+                                          if (isCorrectOption)
+                                            const Icon(Icons.check_circle, size: 14, color: AppColors.neonGreen),
+                                        ],
+                                      ),
+                                    );
+                                  }),
+                                ],
+                              );
+                            },
+                          );
+                        }),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _statusBadge(bool isAnswered, bool isResolved, bool isCorrect) {
+    if (!isAnswered) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.textMuted.withValues(alpha: 0.2), borderRadius: BorderRadius.circular(6)),
+        child: const Text('SKIPPED', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.textMuted)),
+      );
+    }
+    if (!isResolved) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.arenaAccent.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+        child: const Text('AWAITING', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.arenaAccent)),
+      );
+    }
+    if (isCorrect) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(color: AppColors.neonGreen.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+        child: const Text('CORRECT', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.neonGreen)),
+      );
+    }
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(color: AppColors.error.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+      child: const Text('WRONG', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: AppColors.error)),
+    );
   }
 
   Widget _buildQuestionCard() {
@@ -380,6 +724,93 @@ class _AnswerButtonState extends State<_AnswerButton> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// A single missed question shown in the catch-up sheet. Selecting an option
+/// submits it as a late answer (minimum points) and removes it from the list.
+class _MissedQuestionTile extends StatefulWidget {
+  const _MissedQuestionTile({required this.round, required this.controller});
+
+  final PredictionRoundModel round;
+  final ArenaController controller;
+
+  @override
+  State<_MissedQuestionTile> createState() => _MissedQuestionTileState();
+}
+
+class _MissedQuestionTileState extends State<_MissedQuestionTile> {
+  String? _selected;
+  bool _submitted = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final round = widget.round;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFB300).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Text(
+                round.category.toUpperCase(),
+                style: const TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Color(0xFFFFB300), letterSpacing: 0.8),
+              ),
+            ),
+            const Spacer(),
+            const Text('catch-up · min points', style: TextStyle(fontSize: 10, color: AppColors.textMuted)),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Text(
+          round.questionText,
+          style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: round.options.map((option) {
+            final isSel = _selected == option;
+            return GestureDetector(
+              onTap: _submitted
+                  ? null
+                  : () {
+                      setState(() {
+                        _selected = option;
+                        _submitted = true;
+                      });
+                      widget.controller.answerMissedQuestion(round.roundId, option);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Answer submitted for catch-up points'), duration: Duration(seconds: 2)),
+                      );
+                    },
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: isSel ? AppColors.arenaAccent : AppColors.background,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: isSel ? AppColors.arenaAccent : AppColors.cardBorder),
+                ),
+                child: Text(
+                  option,
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: isSel ? Colors.white : AppColors.textPrimary,
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        ),
+      ],
     );
   }
 }

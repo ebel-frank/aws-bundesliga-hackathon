@@ -46,6 +46,63 @@ async function broadcastToRoom(roomCode, message, wsEndpoint) {
   }));
 }
 
+/**
+ * Remove a user from every room for `matchId` except `keepRoomCode`.
+ * If a room becomes empty it is deleted; otherwise the updated member list is
+ * persisted and broadcast so remaining players see the change.
+ */
+async function removeUserFromOtherRooms(matchId, userId, keepRoomCode, wsEndpoint) {
+  if (!matchId || !userId) return;
+  try {
+    const res = await ddb.send(new QueryCommand({
+      TableName: TABLE,
+      IndexName: 'matchId-index',
+      KeyConditionExpression: 'matchId = :matchId',
+      ExpressionAttributeValues: { ':matchId': matchId },
+    }));
+    const rooms = res.Items || [];
+
+    for (const r of rooms) {
+      if (r.roomCode === keepRoomCode) continue;
+      const isMember = (r.members || []).some(m => m.userId === userId);
+      if (!isMember) continue;
+
+      const remaining = r.members.filter(m => m.userId !== userId);
+
+      if (remaining.length === 0) {
+        // Room is now empty — delete it.
+        await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { roomCode: r.roomCode } }));
+      } else {
+        // If the host left, promote the first remaining member.
+        if (r.hostUserId === userId) {
+          remaining[0] = { ...remaining[0], isHost: true };
+          r.hostUserId = remaining[0].userId;
+        }
+        await ddb.send(new UpdateCommand({
+          TableName: TABLE,
+          Key: { roomCode: r.roomCode },
+          UpdateExpression: 'SET members = :m, hostUserId = :h',
+          ExpressionAttributeValues: { ':m': remaining, ':h': r.hostUserId },
+        }));
+      }
+
+      // Broadcast the change to the old room + the match list.
+      if (wsEndpoint) {
+        await broadcastToRoom(r.roomCode, {
+          action: 'player_left',
+          data: { roomCode: r.roomCode, userId },
+        }, wsEndpoint);
+        await broadcastToRoom(`match_${matchId}`, {
+          action: 'room_updated',
+          data: { roomCode: r.roomCode },
+        }, wsEndpoint);
+      }
+    }
+  } catch (err) {
+    console.error('removeUserFromOtherRooms error:', err.message);
+  }
+}
+
 export const getRooms = async (event) => {
   try {
     const matchId = event.pathParameters?.matchId;
@@ -72,7 +129,7 @@ export const getRooms = async (event) => {
 export const createRoom = async (event) => {
   try {
     const body = JSON.parse(event.body || '{}');
-    const { matchId, roomName, maxPlayers = 6, isPrivate = false, hostUserId, hostDisplayName } = body;
+    const { matchId, roomName, maxPlayers = 6, isPrivate = false, hostUserId, hostDisplayName, demoMode = false } = body;
 
     if (!matchId || !roomName || !hostUserId) {
       return { statusCode: 400, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'matchId, roomName, and hostUserId are required' }) };
@@ -85,6 +142,7 @@ export const createRoom = async (event) => {
       roomName,
       maxPlayers,
       isPrivate,
+      demoMode,
       hostUserId,
       members: [{
         userId: hostUserId,
@@ -139,6 +197,10 @@ export const joinRoom = async (event) => {
     if (room.isPrivate && code !== roomCode) {
       return { statusCode: 403, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Invalid room code' }) };
     }
+
+    // Ensure the player is in only ONE room per match: remove them from any
+    // other room for the same match before joining this one.
+    await removeUserFromOtherRooms(room.matchId, userId, roomCode, process.env.WS_ENDPOINT);
 
     // Check if user is already in the room
     const alreadyMember = room.members.some(m => m.userId === userId);
@@ -201,5 +263,66 @@ export const joinRoom = async (event) => {
   } catch (err) {
     console.error('joinRoom error:', err);
     return { statusCode: 500, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Failed to join room' }) };
+  }
+};
+
+export const leaveRoom = async (event) => {
+  try {
+    const roomCode = event.pathParameters?.roomCode;
+    const body = JSON.parse(event.body || '{}');
+    const { userId } = body;
+
+    if (!roomCode || !userId) {
+      return { statusCode: 400, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'roomCode and userId required' }) };
+    }
+
+    const result = await ddb.send(new GetCommand({ TableName: TABLE, Key: { roomCode } }));
+    const room = result.Item;
+    if (!room) {
+      return { statusCode: 404, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Room not found' }) };
+    }
+
+    const remaining = (room.members || []).filter(m => m.userId !== userId);
+    const wsEndpoint = process.env.WS_ENDPOINT;
+
+    if (remaining.length === 0) {
+      // Last member left — delete the room.
+      await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { roomCode } }));
+    } else {
+      let hostUserId = room.hostUserId;
+      // Promote a new host if the host left.
+      if (hostUserId === userId) {
+        remaining[0] = { ...remaining[0], isHost: true };
+        hostUserId = remaining[0].userId;
+      }
+      await ddb.send(new UpdateCommand({
+        TableName: TABLE,
+        Key: { roomCode },
+        UpdateExpression: 'SET members = :m, hostUserId = :h',
+        ExpressionAttributeValues: { ':m': remaining, ':h': hostUserId },
+      }));
+    }
+
+    if (wsEndpoint) {
+      await broadcastToRoom(roomCode, {
+        action: 'player_left',
+        data: { roomCode, userId },
+      }, wsEndpoint);
+      if (room.matchId) {
+        await broadcastToRoom(`match_${room.matchId}`, {
+          action: 'room_updated',
+          data: { roomCode },
+        }, wsEndpoint);
+      }
+    }
+
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+      body: JSON.stringify({ success: true }),
+    };
+  } catch (err) {
+    console.error('leaveRoom error:', err);
+    return { statusCode: 500, headers: { 'Access-Control-Allow-Origin': '*' }, body: JSON.stringify({ error: 'Failed to leave room' }) };
   }
 };

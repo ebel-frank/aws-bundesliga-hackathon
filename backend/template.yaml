@@ -2,9 +2,31 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Live Prediction Arena - Backend API
 
+Parameters:
+  DflDataBucketName:
+    Type: String
+    Default: hackathon-data-686384344354
+    Description: Existing S3 bucket that holds the DFL match XML data.
+  DflDataBucketRegion:
+    Type: String
+    Default: eu-central-1
+    Description: Region of the DFL data bucket (read cross-region by the Lambda).
+  DflEventsKey:
+    Type: String
+    Default: "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/Events_Anonym.xml"
+    Description: S3 key of the DFL match events XML (the single real anonymised fixture).
+  DflMatchInfoKey:
+    Type: String
+    Default: "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/MatchInformations_Anonym.xml"
+    Description: S3 key of the DFL MatchInformations XML.
+  StreamDelayMs:
+    Type: String
+    Default: "3000"
+    Description: Delay (ms) between streamed DFL events during a match.
+
 Globals:
   Function:
-    Runtime: nodejs20.x
+    Runtime: nodejs24.x
     Timeout: 30
     MemorySize: 256
     Environment:
@@ -258,11 +280,13 @@ Resources:
           CONNECTIONS_TABLE: !Ref ConnectionsTable
           WS_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
           QUESTION_TRIGGER_FUNCTION: !Ref QuestionTriggerFunction
+          DFL_DATA_BUCKET: !Ref DflDataBucketName
+          DFL_DATA_REGION: !Ref DflDataBucketRegion
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
         - S3ReadPolicy:
-            BucketName: '*'
+            BucketName: !Ref DflDataBucketName
         - Statement:
             - Effect: Allow
               Action: execute-api:ManageConnections
@@ -398,15 +422,32 @@ Resources:
     Properties:
       Handler: websocket.message
       CodeUri: functions/
+      Environment:
+        Variables:
+          QUESTIONS_TABLE: !Ref QuestionsTable
+          DFL_EVENTS_FUNCTION: !Ref DflEventsFunction
+          QUESTION_TRIGGER_FUNCTION: !Ref QuestionTriggerFunction
+          DFL_DATA_BUCKET: !Ref DflDataBucketName
+          DFL_EVENTS_KEY: !Ref DflEventsKey
+          DFL_MATCH_INFO_KEY: !Ref DflMatchInfoKey
+          STREAM_DELAY_MS: !Ref StreamDelayMs
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ConnectionsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref RoomsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref QuestionsTable
         - Statement:
             - Effect: Allow
               Action: execute-api:ManageConnections
               Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${WebSocketApi}/*"
+        - Statement:
+            - Effect: Allow
+              Action: lambda:InvokeFunction
+              Resource:
+                - !GetAtt DflEventsFunction.Arn
+                - !GetAtt QuestionTriggerFunction.Arn
 
   ConnectRoute:
     Type: AWS::ApiGatewayV2::Route
@@ -516,3 +557,7 @@ Outputs:
   MatchStateTableName:
     Description: Match state buffer table
     Value: !Ref MatchStateTable
+
+  DflDataBucketName:
+    Description: S3 bucket for DFL match XML data
+    Value: !Ref DflDataBucketName

@@ -16,14 +16,19 @@ const ROUNDS_TABLE = 'lpa-rounds';
 
 const matches = [
   {
-    matchId: 'm1',
+    // ── Real anonymised DFL fixture (the live-streamed match) ──
+    // Source: MatchInformations_Anonym.xml in the hackathon S3 bucket.
+    // Anonymised as "FC Team" vs "Club" (DFL-CLU-000001/2); displayed via the
+    // same team-name overrides the question engine uses (Bayern Munich / Hamburger SV).
+    // Bundesliga MatchDay 1, Season 2025/2026, kickoff 2025-01-01 16:30, final 5:0.
+    matchId: 'DFL-MAT-000001',
     homeTeam: 'Bayern Munich',
-    awayTeam: 'Eintracht Frankfurt',
+    awayTeam: 'Hamburger SV',
     homeTeamBadge: 'assets/icons/germany_bayern-munchen.football-logo.svg',
-    awayTeamBadge: 'assets/icons/germany_eintracht-frankfurt.football-logos.svg',
-    league: 'Bundesliga',
-    matchTime: '20:30',
-    matchDate: 'Today',
+    awayTeamBadge: 'assets/icons/germany_hamburger-sv.football-logos.svg',
+    league: 'Bundesliga · Matchday 1',
+    matchTime: '16:30',
+    matchDate: 'Wed, Jan 1',
     status: 'live',
     roomCount: 0,
   },
@@ -80,12 +85,13 @@ const matches = [
 // ─── Sample Rounds (per match) ──────────────────────────────────
 
 const roundsPerMatch = {
-  m1: [
-    { roundNumber: 1, questionText: 'Who will score the first goal?', options: ['Musiala', 'Kane', 'Marmoush', 'Ekitiké'], correctAnswer: 'Kane', category: 'goalscorer' },
+  // Real anonymised fixture — answers reflect the actual 5:0 result.
+  'DFL-MAT-000001': [
+    { roundNumber: 1, questionText: 'Which team scores the first goal?', options: ['Bayern Munich', 'Hamburger SV'], correctAnswer: 'Bayern Munich', category: 'goalscorer' },
     { roundNumber: 2, questionText: 'Total goals over/under 2.5?', options: ['Over 2.5', 'Under 2.5'], correctAnswer: 'Over 2.5', category: 'overunder' },
-    { roundNumber: 3, questionText: 'Which team gets the first yellow card?', options: ['Bayern', 'Frankfurt'], correctAnswer: 'Frankfurt', category: 'cards' },
-    { roundNumber: 4, questionText: 'Final result?', options: ['Bayern Win', 'Draw', 'Frankfurt Win'], correctAnswer: 'Bayern Win', category: 'result' },
-    { roundNumber: 5, questionText: 'Man of the Match?', options: ['Kane', 'Musiala', 'Kimmich', 'Marmoush'], correctAnswer: 'Musiala', category: 'stats' },
+    { roundNumber: 3, questionText: 'Will Hamburger SV score?', options: ['Yes', 'No'], correctAnswer: 'No', category: 'cards' },
+    { roundNumber: 4, questionText: 'Final result?', options: ['Bayern Win', 'Draw', 'Hamburg Win'], correctAnswer: 'Bayern Win', category: 'result' },
+    { roundNumber: 5, questionText: 'How many goals will Bayern Munich score?', options: ['2 or fewer', '3', '4', '5 or more'], correctAnswer: '5 or more', category: 'stats' },
   ],
   m2: [
     { roundNumber: 1, questionText: 'Who will score first?', options: ['Marmoush', 'Ekitiké', 'Kane', 'Musiala'], correctAnswer: 'Marmoush', category: 'goalscorer' },

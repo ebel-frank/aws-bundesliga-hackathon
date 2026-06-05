@@ -6,7 +6,7 @@ import '../models/squad_model.dart';
 /// Central API service for communicating with the AWS backend.
 /// Replace [baseUrl] with your deployed API Gateway URL after running `sam deploy`.
 class ApiService {
-  static const String baseUrl = 'https://ktdfmw9ukf.execute-api.us-east-1.amazonaws.com/prod';
+  static const String baseUrl = 'https://mxp17lrhe7.execute-api.us-east-1.amazonaws.com/prod';
 
   static final Dio _dio = Dio(BaseOptions(
     baseUrl: baseUrl,
@@ -50,6 +50,7 @@ class ApiService {
     required bool isPrivate,
     required String hostUserId,
     String? hostDisplayName,
+    bool demoMode = false,
   }) async {
     try {
       final response = await _dio.post('/rooms', data: {
@@ -59,6 +60,7 @@ class ApiService {
         'isPrivate': isPrivate,
         'hostUserId': hostUserId,
         'hostDisplayName': hostDisplayName ?? 'Host',
+        'demoMode': demoMode,
       });
       return SquadModel.fromJson(response.data['room']);
     } on DioException catch (e) {

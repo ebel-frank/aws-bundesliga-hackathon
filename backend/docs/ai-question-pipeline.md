@@ -64,8 +64,8 @@ play.IsFreeKick === 'true' && event.xPosition > 73.5  // (105m * 0.7)
 ## Bedrock Integration
 
 ### Model
-- **Claude 3 Haiku** (`anthropic.claude-3-haiku-20240307-v1:0`)
-- Direct invoke via `@aws-sdk/client-bedrock-runtime`
+- **Amazon Nova Lite** (`amazon.nova-lite-v1:0`), invoked in `us-east-1`
+- Direct invoke via `@aws-sdk/client-bedrock-runtime` using the `Converse` API
 - No intermediary API
 
 ### Question Generation

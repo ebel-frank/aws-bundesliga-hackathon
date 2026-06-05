@@ -10,8 +10,8 @@
  *   --delay <ms>          Delay between events in ms (default 3000)
  * 
  * Examples:
- *   node trigger-dfl-events.mjs lpa-dfl-data Match-Events/Events_Anonym.xml DFL-MAT-111111 --match-info Match-Events/MatchInformations_Anonym.xml --room A7X9K2
- *   node trigger-dfl-events.mjs lpa-dfl-data Match-Events/Events_Anonym.xml DFL-MAT-111111 --delay 2000
+ *   node trigger-dfl-events.mjs "hackathon-data-686384344354" "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/Events_Anonym.xml" DFL-MAT-000001 --match-info "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/MatchInformations_Anonym.xml" --room A7X9K2
+ *   node trigger-dfl-events.mjs "hackathon-data-686384344354" "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/Events_Anonym.xml" DFL-MAT-000001 --delay 2000
  */
 
 import { LambdaClient, InvokeCommand, ListFunctionsCommand } from '@aws-sdk/client-lambda';
@@ -33,7 +33,7 @@ if (!bucket || !eventsKey || !matchId) {
   console.error('  --delay <ms>          Delay between events in ms (default 3000)');
   console.error('');
   console.error('Example:');
-  console.error('  node trigger-dfl-events.mjs lpa-dfl-data Match-Events/Events_Anonym.xml DFL-MAT-111111 --match-info Match-Events/MatchInformations_Anonym.xml --room A7X9K2');
+  console.error('  node trigger-dfl-events.mjs "hackathon-data-686384344354" "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/Events_Anonym.xml" DFL-MAT-000001 --match-info "Challenge 3 – A Real Time Social Match Experience/data/Match-Events/MatchInformations_Anonym.xml" --room A7X9K2');
   process.exit(1);
 }
 

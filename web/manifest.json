@@ -1,0 +1,35 @@
+{
+    "name": "Live Prediction Arena",
+    "short_name": "Arena",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#0A0E1A",
+    "theme_color": "#0A0E1A",
+    "description": "A game-like hub for live sports prediction.",
+    "orientation": "portrait-primary",
+    "prefer_related_applications": false,
+    "icons": [
+        {
+            "src": "icons/Icon-192.png",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-512.png",
+            "sizes": "512x512",
+            "type": "image/png"
+        },
+        {
+            "src": "icons/Icon-maskable-192.png",
+            "sizes": "192x192",
+            "type": "image/png",
+            "purpose": "maskable"
+        },
+        {
+            "src": "icons/Icon-maskable-512.png",
+            "sizes": "512x512",
+            "type": "image/png",
+            "purpose": "maskable"
+        }
+    ]
+}

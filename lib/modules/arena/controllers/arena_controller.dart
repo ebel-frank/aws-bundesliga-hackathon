@@ -55,6 +55,7 @@ class ArenaController extends GetxController {
   final RxList<SquadModel> availableRooms = <SquadModel>[].obs;
   final RxBool isLoadingRooms = false.obs;
   final RxBool isPrivateToggle = false.obs;
+  final RxBool isDemoToggle = false.obs; // demo mode: 5-question limit, tighter spacing
   final RxString roomSearchQuery = ''.obs;
 
   /// Filtered rooms based on search query.
@@ -79,12 +80,30 @@ class ArenaController extends GetxController {
   /// Stores the user's picks: questionId → selected option
   final Map<String, String> _userPicks = {};
 
+  /// Public access to user picks for UI display.
+  Map<String, String> get userPicks => _userPicks;
+
+  /// Questions whose live timer expired before the user answered. They remain
+  /// answerable (for minimum/catch-up points) from the "Missed Questions"
+  /// section until the server resolves them.
+  final RxList<PredictionRoundModel> missedQuestions = <PredictionRoundModel>[].obs;
+
+  /// Question ids already resolved by the server (so we never re-surface them).
+  final Set<String> _resolvedQuestionIds = {};
+
+  /// Resolution status per question for QA history: questionId → 'correct' | 'wrong'.
+  /// Reactive so the QA history updates live as the server resolves questions.
+  final RxMap<String, String> questionResults = <String, String>{}.obs;
+
   // ── Active prediction round ───────────────────────────────────
   final Rx<PredictionRoundModel?> activeRound = Rx<PredictionRoundModel?>(null);
   final RxList<PlayerPickModel> roundPicks = <PlayerPickModel>[].obs;
   final RxInt countdownSeconds = 15.obs;
   final RxString myPick = ''.obs;
   final RxBool hasLockedIn = false.obs;
+  // True once the live timer has elapsed but the question is still answerable
+  // for minimum (catch-up) points until it resolves.
+  final RxBool inCatchUp = false.obs;
 
   // ── Leaderboard ───────────────────────────────────────────────
   final RxList<PlayerModel> leaderboard = <PlayerModel>[].obs;
@@ -107,6 +126,8 @@ class ArenaController extends GetxController {
   final RxInt matchCountdownSeconds = 0.obs;
   final RxBool isMatchLive = false.obs;
   Timer? _matchCountdownTimer;
+  // Guards against starting the game twice (host click + its own broadcast echo).
+  bool _gameStarted = false;
 
   // ── Timer ─────────────────────────────────────────────────────
   Timer? _countdownTimer;
@@ -127,6 +148,18 @@ class ArenaController extends GetxController {
       }
     } finally {
       isLoadingMatches.value = false;
+    }
+    // Fetch room counts for each match in background
+    _updateRoomCounts();
+  }
+
+  /// Updates room counts for all loaded matches.
+  Future<void> _updateRoomCounts() async {
+    for (int i = 0; i < availableMatches.length; i++) {
+      try {
+        final rooms = await ApiService.getRooms(availableMatches[i].matchId);
+        availableMatches[i] = availableMatches[i].copyWith(roomCount: rooms.length);
+      } catch (_) {}
     }
   }
 
@@ -165,7 +198,8 @@ class ArenaController extends GetxController {
           squad.value = SquadModel.fromJson(data['room'] as Map<String, dynamic>);
         }
       } else if (action == 'game_started') {
-        startGame();
+        // Another player (the host) started the game — sync into the match.
+        _beginGame(broadcast: false);
       } else if (action == 'dfl_event') {
         _handleDflWebSocketEvent(msg);
       } else if (action == 'prediction_question') {
@@ -173,6 +207,8 @@ class ArenaController extends GetxController {
       } else if (action == 'questions_resolved') {
         _handleQuestionsResolved(msg);
       } else if (action == 'match_ended') {
+        _handleMatchEnded(msg);
+      } else if (action == 'end_game') {
         _handleMatchEnded(msg);
       } else if (action == 'chat_message') {
         _handleChatMessage(msg);
@@ -208,6 +244,17 @@ class ArenaController extends GetxController {
 
     if (question.isEmpty || options.isEmpty) return;
 
+    // Guard against duplicate broadcasts of the same question (network echo,
+    // reconnect replays, or the backend firing twice) — by id or by text.
+    if (questionId.isNotEmpty &&
+        rounds.any((r) => r.roundId == questionId)) {
+      return;
+    }
+    final normalizedQ = question.trim().toLowerCase();
+    if (rounds.any((r) => r.questionText.trim().toLowerCase() == normalizedQ)) {
+      return;
+    }
+
     // Create a new prediction round from the AI-generated question
     final newRound = PredictionRoundModel(
       roundId: questionId.isNotEmpty ? questionId : 'ai_${DateTime.now().millisecondsSinceEpoch}',
@@ -227,6 +274,7 @@ class ArenaController extends GetxController {
     // Reset pick state and start the round
     myPick.value = '';
     hasLockedIn.value = false;
+    inCatchUp.value = false;
     activeRound.value = newRound;
     countdownSeconds.value = timeLimit;
     currentScreen.value = ArenaScreen.prediction;
@@ -237,7 +285,15 @@ class ArenaController extends GetxController {
     _startCountdown();
   }
 
-  /// Handle end-of-match question resolutions from the backend.
+  /// Loose answer equality matching the backend (casing/whitespace/punctuation tolerant).
+  bool _answersEqual(String a, String b) {
+    String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return norm(a) == norm(b);
+  }
+
+  /// Handle question resolutions from the backend. Fires live (per-question)
+  /// during the match and again at the final whistle. The server is the source
+  /// of truth for scores and the leaderboard.
   void _handleQuestionsResolved(Map<String, dynamic> msg) {
     final data = msg['data'] as Map<String, dynamic>?;
     if (data == null) return;
@@ -245,65 +301,179 @@ class ArenaController extends GetxController {
     final results = data['results'] as List<dynamic>? ?? [];
     if (results.isEmpty) return;
 
-    // Calculate score: 10 XP per correct answer
-    int correctCount = 0;
-    for (final result in results) {
-      final questionId = result['questionId'] as String? ?? '';
-      final correctAnswer = result['correctAnswer'] as String? ?? '';
-      final userPick = _userPicks[questionId];
-      if (userPick != null && userPick == correctAnswer) {
-        correctCount++;
-      }
+    // 1. Apply the server's authoritative leaderboard if present.
+    final serverLb = data['leaderboard'] as Map<String, dynamic>?;
+    if (serverLb != null && serverLb.isNotEmpty) {
+      _applyServerLeaderboard(serverLb);
     }
 
-    final totalXp = correctCount * 10;
+    // 2. Record resolution status for ALL results (QA history + correctAnswer),
+    //    then surface the most recent answered result as a round-result overlay.
+    bool overlayShown = false;
+    for (final result in results.reversed) {
+      final questionId = result['questionId'] as String? ?? '';
+      if (questionId.isEmpty) continue;
 
-    // Build leaderboard with current user's score
-    // For now, populate with squad members — current user gets calculated XP, others get 0
-    final members = squad.value?.members ?? [];
-    final lb = members.map((m) {
-      if (m.userId == _currentUserId) {
-        return m.copyWith(totalXP: totalXp);
+      // Mark resolved + drop from the missed list (can no longer be answered).
+      _resolvedQuestionIds.add(questionId);
+      missedQuestions.removeWhere((q) => q.roundId == questionId);
+
+      final scores = result['scores'] as Map<String, dynamic>?;
+      final myPoints = (scores?[_currentUserId] as num?)?.toInt() ?? 0;
+      final myPickForQ = _userPicks[questionId];
+      final correctAnswer = result['correctAnswer'] as String? ?? '';
+
+      // Correctness is determined by comparing the user's pick to the
+      // authoritative correctAnswer (loose match), NOT by points — points can
+      // be 0 for a correct-but-late answer or lag behind pick persistence.
+      final bool correct = myPickForQ != null &&
+          correctAnswer.isNotEmpty &&
+          _answersEqual(myPickForQ, correctAnswer);
+
+      // Record resolution status for QA history (live update) — only if answered
+      if (myPickForQ != null) {
+        questionResults[questionId] = correct ? 'correct' : 'wrong';
       }
-      return m.copyWith(totalXP: 0); // Other players' scores would come from backend
-    }).toList();
 
-    // Sort by XP descending
+      // Update the round's correctAnswer for QA history display
+      final roundIdx = rounds.indexWhere((r) => r.roundId == questionId);
+      if (roundIdx != -1 && correctAnswer.isNotEmpty) {
+        rounds[roundIdx] = PredictionRoundModel(
+          roundId: rounds[roundIdx].roundId,
+          roundNumber: rounds[roundIdx].roundNumber,
+          questionText: rounds[roundIdx].questionText,
+          options: rounds[roundIdx].options,
+          correctAnswer: correctAnswer,
+          category: rounds[roundIdx].category,
+          timeLimitSeconds: rounds[roundIdx].timeLimitSeconds,
+        );
+      }
+
+      // If this resolves the question currently on screen, clear it.
+      if (activeRound.value?.roundId == questionId) {
+        _countdownTimer?.cancel();
+        inCatchUp.value = false;
+        activeRound.value = null;
+      }
+
+      // Show a result toast only once, for the most recent answered question.
+      if (!overlayShown && myPickForQ != null) {
+        overlayShown = true;
+        wasCorrect.value = correct;
+        xpEarnedThisRound.value = myPoints;
+        // Fast answers earn well above the catch-up minimum (100); flag a speed badge.
+        speedBonusEarned.value = correct && myPoints >= 600;
+        isDeferred.value = false;
+        newStreak.value = correct ? newStreak.value + 1 : 0;
+
+        _showResultToast(correct, myPoints);
+      }
+    }
+  }
+
+  /// Show a brief correct/wrong toast (replaces the round-result overlay).
+  void _showResultToast(bool correct, int points) {
+    if (Get.isSnackbarOpen) {
+      Get.closeAllSnackbars();
+    }
+    final String subtitle;
+    if (correct) {
+      // Points can lag behind (server scores async); avoid a misleading "+0 XP".
+      subtitle = points > 0 ? '+$points XP' : 'Nice one! Points updating...';
+    } else {
+      subtitle = 'Better luck on the next one';
+    }
+    Get.snackbar(
+      correct ? '✓ Correct!' : '✗ Wrong',
+      subtitle,
+      snackPosition: SnackPosition.TOP,
+      duration: const Duration(seconds: 2),
+      backgroundColor: const Color(0xDD1A2138),
+      colorText: correct ? const Color(0xFF00FF88) : const Color(0xFFFF3B5C),
+      margin: const EdgeInsets.all(12),
+      borderRadius: 10,
+    );
+  }
+
+  /// Replace the leaderboard XP totals with the server's authoritative values.
+  void _applyServerLeaderboard(Map<String, dynamic> serverLb) {
+    final members = squad.value?.members ?? [];
+    if (members.isEmpty) return;
+    final lb = members.map((m) {
+      final xp = (serverLb[m.userId] as num?)?.toInt() ?? m.totalXP;
+      return m.copyWith(totalXP: xp);
+    }).toList();
     lb.sort((a, b) => b.totalXP.compareTo(a.totalXP));
     leaderboard.assignAll(lb);
 
-    // Determine badges
-    final badges = <String>[];
-    if (correctCount == results.length && results.isNotEmpty) {
-      badges.add('Perfect Round');
+    // Also update the squad members so the in-game top bar reflects scores.
+    final current = squad.value;
+    if (current != null) {
+      final updatedMembers = current.members.map((m) {
+        final xp = (serverLb[m.userId] as num?)?.toInt() ?? m.totalXP;
+        return m.copyWith(totalXP: xp);
+      }).toList();
+      squad.value = current.copyWith(members: updatedMembers);
     }
-    if (correctCount >= 3) {
-      badges.add('Streak Master');
-    }
-    earnedBadges.assignAll(badges);
-
-    // Navigate to end screen
-    _countdownTimer?.cancel();
-    currentScreen.value = ArenaScreen.end;
-    Get.toNamed(AppRoutes.arenaEnd);
   }
 
-  /// Handle match ended signal (stream finished).
-  void _handleMatchEnded(Map<String, dynamic> msg) {
-    // If questions_resolved hasn't already navigated us, go to end screen
+  /// Host ends the demo game manually. Tells the backend to resolve all
+  /// pending questions + stop the stream, and broadcasts so every player
+  /// navigates to the results screen.
+  void endGameForAll() {
+    final roomCode = squad.value?.roomCode ?? '';
+    final matchId = selectedMatch.value?.matchId ?? '';
+    if (roomCode.isNotEmpty) {
+      _roomWs.send(
+        action: 'end_game',
+        roomCode: roomCode,
+        data: {'matchId': matchId},
+      );
+    }
+    // Navigate ourselves immediately to results.
+    _navigateToEnd();
+  }
+
+  /// Navigate to the end/results screen. Shared by endGameForAll + _handleMatchEnded.
+  void _navigateToEnd() {
     if (currentScreen.value == ArenaScreen.end) return;
 
     _countdownTimer?.cancel();
     activeRound.value = null;
 
-    // Build leaderboard with what we have
+    // Fall back to current squad ordering if we have no leaderboard yet.
     final members = squad.value?.members ?? [];
     if (leaderboard.isEmpty && members.isNotEmpty) {
-      leaderboard.assignAll(members);
+      final lb = List.of(members)..sort((a, b) => b.totalXP.compareTo(a.totalXP));
+      leaderboard.assignAll(lb);
     }
 
+    _awardEndBadges();
     currentScreen.value = ArenaScreen.end;
-    Get.toNamed(AppRoutes.arenaEnd);
+    Get.offNamed(AppRoutes.arenaEnd);
+  }
+
+  /// Handle match ended signal (stream finished).
+  void _handleMatchEnded(Map<String, dynamic> msg) {
+    // Apply final leaderboard if the match-ended payload carries one.
+    final data = msg['data'] as Map<String, dynamic>?;
+    final serverLb = data?['leaderboard'] as Map<String, dynamic>?;
+    if (serverLb != null && serverLb.isNotEmpty) {
+      _applyServerLeaderboard(serverLb);
+    }
+
+    _navigateToEnd();
+  }
+
+  /// Derive end-of-match badges for the local player from final results.
+  void _awardEndBadges() {
+    final badges = <String>[];
+    if (leaderboard.isNotEmpty && leaderboard.first.userId == _currentUserId) {
+      badges.add('Champion');
+    }
+    if (newStreak.value >= 3) badges.add('Streak Master');
+    if (speedBonusEarned.value) badges.add('Speed Demon');
+    earnedBadges.assignAll(badges);
   }
 
   /// Handle incoming chat message from another player.
@@ -433,6 +603,7 @@ class ArenaController extends GetxController {
     required String roomName,
     required int maxPlayers,
     required bool isPrivate,
+    bool demoMode = false,
   }) async {
     isCreatingRoom.value = true;
     errorMessage.value = '';
@@ -450,11 +621,13 @@ class ArenaController extends GetxController {
         isPrivate: isPrivate,
         hostUserId: _currentUserId,
         hostDisplayName: _currentDisplayName,
+        demoMode: demoMode,
       );
 
       squad.value = createdRoom;
       currentScreen.value = ArenaScreen.waiting;
       arenaPageIndex.value = 2;
+      _gameStarted = false;
       _connectRoomWebSocket(createdRoom.roomCode);
       // If match is already live, skip countdown
       if (selectedMatch.value?.status == 'live') {
@@ -487,6 +660,7 @@ class ArenaController extends GetxController {
       squad.value = joinedRoom;
       currentScreen.value = ArenaScreen.waiting;
       arenaPageIndex.value = 2;
+      _gameStarted = false;
       _connectRoomWebSocket(joinedRoom.roomCode);
       // If match is already live, skip countdown
       if (selectedMatch.value?.status == 'live') {
@@ -503,10 +677,31 @@ class ArenaController extends GetxController {
     }
   }
 
-  /// Host starts the game. Navigates to prediction screen.
-  /// Questions arrive via WebSocket from the AI pipeline.
+  /// Host starts the game. Broadcasts game_started to the room (which triggers
+  /// the backend to auto-stream the real match data), then navigates everyone
+  /// to the prediction screen. Idempotent via [_gameStarted].
   void startGame() async {
     if (!isMatchLive.value) return;
+    _beginGame(broadcast: true);
+  }
+
+  /// Shared start path. [broadcast] true when this client is the initiating host.
+  /// All clients (host + joiners) run the local setup + navigation exactly once.
+  void _beginGame({required bool broadcast}) {
+    if (_gameStarted) return;
+    _gameStarted = true;
+
+    // Host announces the start so the backend auto-streams and peers sync.
+    if (broadcast) {
+      final roomCode = squad.value?.roomCode ?? '';
+      if (roomCode.isNotEmpty) {
+        _roomWs.sendGameStarted(
+          roomCode,
+          matchId: selectedMatch.value?.matchId,
+          demoMode: squad.value?.demoMode ?? false,
+        );
+      }
+    }
 
     // Clear any old rounds
     rounds.clear();
@@ -514,10 +709,14 @@ class ArenaController extends GetxController {
     currentRoundIndex.value = -1;
     activeRound.value = null;
     _userPicks.clear();
+    missedQuestions.clear();
+    _resolvedQuestionIds.clear();
+    questionResults.clear();
     chatMessages.clear();
     floatingReactions.clear();
 
-    // Navigate to prediction screen — questions will arrive via WebSocket
+    // Navigate to prediction screen — questions will arrive via WebSocket.
+    // The backend waits ~5s, fires the kick-off questions, then streams events.
     currentScreen.value = ArenaScreen.prediction;
     Get.toNamed(AppRoutes.arenaPrediction);
   }
@@ -569,15 +768,66 @@ class ArenaController extends GetxController {
     _startCountdown();
   }
 
-  /// Player locks in their answer. Idempotent — ignored if already locked.
-  /// POST /rounds/{roundId}/pick { userId, pick, secondsTaken }
+  /// Player locks in their answer to the ACTIVE question. Sends the pick to the
+  /// server for real-time scoring and immediately dismisses the question so it
+  /// stops displaying (the next question can take the slot).
   void lockInPick(String option) {
-    if (hasLockedIn.value) return;
+    final round = activeRound.value;
+    if (round == null) return;
+    if (hasLockedIn.value) return; // already answered this one
 
     myPick.value = option;
     hasLockedIn.value = true;
+    _userPicks[round.roundId] = option;
 
-    // TODO: POST /rounds/{roundId}/pick to backend
+    final secondsTaken = round.timeLimitSeconds - countdownSeconds.value;
+    _sendPick(round.roundId, option, secondsTaken < 0 ? 0 : secondsTaken);
+
+    // Show brief confirmation
+    Get.snackbar(
+      '✓ Answer Locked!',
+      'Your pick: $option',
+      snackPosition: SnackPosition.TOP,
+      duration: const Duration(seconds: 2),
+      backgroundColor: const Color(0xDD1A2138),
+      colorText: const Color(0xFFFFFFFF),
+      margin: const EdgeInsets.all(12),
+      borderRadius: 10,
+    );
+
+    // Dismiss immediately — stop displaying the answered question.
+    _countdownTimer?.cancel();
+    inCatchUp.value = false;
+    activeRound.value = null;
+  }
+
+  /// Answer a question from the "Missed Questions" section. Sends the pick as a
+  /// late (catch-up) answer and removes it from the missed list right away.
+  void answerMissedQuestion(String questionId, String option) {
+    final idx = missedQuestions.indexWhere((q) => q.roundId == questionId);
+    if (idx == -1) return;
+    final round = missedQuestions[idx];
+
+    _userPicks[questionId] = option;
+    // secondsTaken beyond the limit marks this as a late/catch-up answer server-side.
+    _sendPick(questionId, option, round.timeLimitSeconds + 1);
+
+    missedQuestions.removeAt(idx);
+  }
+
+  /// Send a pick to the server over the room WebSocket.
+  void _sendPick(String questionId, String option, int secondsTaken) {
+    _roomWs.send(
+      action: 'submit_pick',
+      roomCode: squad.value?.roomCode ?? '',
+      data: {
+        'matchId': selectedMatch.value?.matchId ?? '',
+        'questionId': questionId,
+        'userId': _currentUserId,
+        'pick': option,
+        'secondsTaken': secondsTaken,
+      },
+    );
   }
 
   /// Alert the user that a new question has arrived — vibrate + system sound.
@@ -605,47 +855,26 @@ class ArenaController extends GetxController {
     });
   }
 
-  /// Called when timer hits 0. Records the pick and waits for next question.
-  /// Correct answers are resolved at match end.
+  /// Called when the per-question live timer hits 0.
+  /// - If the user already answered: just clear the active slot (wait for the
+  ///   server's resolution to score it).
+  /// - If the user did NOT answer: move it into the "Missed Questions" section
+  ///   so they can still answer it for minimum points, and free the active slot
+  ///   for the next incoming question.
   void _closeRound() {
     _countdownTimer?.cancel();
-
     final round = activeRound.value;
     if (round == null) return;
 
-    // Record the pick (will be resolved at match end)
-    final pick = myPick.value;
-    if (pick.isNotEmpty) {
-      // Store locally for scoring at match end
-      _userPicks[round.roundId] = pick;
-
-      // Send pick to backend via WebSocket
-      _roomWs.send(
-        action: 'submit_pick',
-        roomCode: squad.value?.roomCode ?? '',
-        data: {
-          'questionId': round.roundId,
-          'userId': _currentUserId,
-          'pick': pick,
-        },
-      );
-
-      // Show "answer recorded" state — deferred resolution at match end
-      currentScreen.value = ArenaScreen.roundResult;
-      isDeferred.value = true;
-      wasCorrect.value = false; // Unknown yet
-      xpEarnedThisRound.value = 0; // Will be calculated at match end
-
-      // After 3 seconds, go back to waiting for next question
-      Future.delayed(const Duration(seconds: 3), () {
-        activeRound.value = null;
-        currentScreen.value = ArenaScreen.prediction;
-      });
-    } else {
-      // No pick made — skip overlay, go straight back to waiting
-      activeRound.value = null;
-      currentScreen.value = ArenaScreen.prediction;
+    final answered = _userPicks.containsKey(round.roundId);
+    if (!answered && !_resolvedQuestionIds.contains(round.roundId)) {
+      if (missedQuestions.every((q) => q.roundId != round.roundId)) {
+        missedQuestions.add(round);
+      }
     }
+
+    inCatchUp.value = false;
+    activeRound.value = null;
   }
 
   /// Called after all rounds complete. Finalizes game, calculates badges,
